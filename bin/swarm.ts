@@ -13,11 +13,16 @@
  */
 
 import * as p from "@clack/prompts";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
-const VERSION = "0.11.0";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf-8"),
+);
+const VERSION: string = pkg.version;
 
 // ============================================================================
 // ASCII Art & Branding
