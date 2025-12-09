@@ -385,8 +385,8 @@ const DEPENDENCIES: Dependency[] = [
   },
   {
     name: "semantic-memory",
-    command: "which",
-    checkArgs: ["semantic-memory"],
+    command: "semantic-memory",
+    checkArgs: ["stats"],
     required: false,
     install: "npm install -g semantic-memory",
     installType: "npm",
