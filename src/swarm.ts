@@ -1222,7 +1222,7 @@ export const swarm_plan_prompt = tool({
       .number()
       .int()
       .min(2)
-      .max(10)
+      
       .default(5)
       .describe("Maximum number of subtasks (default: 5)"),
     context: tool.schema
@@ -1237,7 +1237,7 @@ export const swarm_plan_prompt = tool({
       .number()
       .int()
       .min(1)
-      .max(10)
+      
       .optional()
       .describe("Max CASS results to include (default: 3)"),
   },
@@ -1352,7 +1352,7 @@ export const swarm_decompose = tool({
       .number()
       .int()
       .min(2)
-      .max(10)
+      
       .default(5)
       .describe("Maximum number of subtasks (default: 5)"),
     context: tool.schema
@@ -1367,7 +1367,7 @@ export const swarm_decompose = tool({
       .number()
       .int()
       .min(1)
-      .max(10)
+      
       .optional()
       .describe("Max CASS results to include (default: 3)"),
   },

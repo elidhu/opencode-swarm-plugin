@@ -57,7 +57,7 @@ export type SubtaskDependency = z.infer<typeof SubtaskDependencySchema>;
 export const TaskDecompositionSchema = z.object({
   task: z.string(), // Original task description
   reasoning: z.string().optional(), // Why this decomposition
-  subtasks: z.array(DecomposedSubtaskSchema).min(1).max(10),
+  subtasks: z.array(DecomposedSubtaskSchema).min(1),
   dependencies: z.array(SubtaskDependencySchema).optional().default([]),
   shared_context: z.string().optional(), // Context to pass to all agents
 });
@@ -68,7 +68,7 @@ export type TaskDecomposition = z.infer<typeof TaskDecompositionSchema>;
  */
 export const DecomposeArgsSchema = z.object({
   task: z.string().min(1),
-  max_subtasks: z.number().int().min(1).max(10).default(5),
+  max_subtasks: z.number().int().min(1).default(5),
   context: z.string().optional(),
 });
 export type DecomposeArgs = z.infer<typeof DecomposeArgsSchema>;

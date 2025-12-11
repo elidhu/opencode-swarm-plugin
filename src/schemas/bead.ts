@@ -117,7 +117,7 @@ export const BeadTreeSchema = z.object({
     title: z.string().min(1),
     description: z.string().optional().default(""),
   }),
-  subtasks: z.array(SubtaskSpecSchema).min(1).max(10),
+  subtasks: z.array(SubtaskSpecSchema).min(1),
 });
 export type BeadTree = z.infer<typeof BeadTreeSchema>;
 
@@ -133,8 +133,7 @@ export const EpicCreateArgsSchema = z.object({
         files: z.array(z.string()).optional().default([]),
       }),
     )
-    .min(1)
-    .max(10),
+    .min(1),
 });
 export type EpicCreateArgs = z.infer<typeof EpicCreateArgsSchema>;
 
