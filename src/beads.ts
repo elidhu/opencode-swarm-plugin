@@ -717,11 +717,61 @@ export const beads_sync = tool({
 
     // 5. Pull if requested (with rebase to avoid merge commits)
     if (autoPull) {
+      // Check for unstaged changes that would block pull --rebase
+      const dirtyCheckResult = await runGitCommand([
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+      ]);
+      const hasDirtyFiles = dirtyCheckResult.stdout.trim() !== "";
+      let didStash = false;
+
+      // Stash dirty files before pull (self-healing for "unstaged changes" error)
+      if (hasDirtyFiles) {
+        console.warn(
+          "[beads] Detected unstaged changes, stashing before pull...",
+        );
+        const stashResult = await runGitCommand([
+          "stash",
+          "push",
+          "-m",
+          "beads_sync: auto-stash before pull",
+          "--include-untracked",
+        ]);
+        if (stashResult.exitCode === 0) {
+          didStash = true;
+          console.warn("[beads] Changes stashed successfully");
+        } else {
+          // Stash failed - try pull anyway, it might work
+          console.warn(
+            `[beads] Stash failed (${stashResult.stderr}), attempting pull anyway...`,
+          );
+        }
+      }
+
       const pullResult = await withTimeout(
         runGitCommand(["pull", "--rebase"]),
         TIMEOUT_MS,
         "git pull --rebase",
       );
+
+      // Restore stashed changes regardless of pull result
+      if (didStash) {
+        console.warn("[beads] Restoring stashed changes...");
+        const unstashResult = await runGitCommand(["stash", "pop"]);
+        if (unstashResult.exitCode !== 0) {
+          // Unstash failed - this is bad, user needs to know
+          console.error(
+            `[beads] WARNING: Failed to restore stashed changes: ${unstashResult.stderr}`,
+          );
+          console.error(
+            "[beads] Your changes are in 'git stash list' - run 'git stash pop' manually",
+          );
+        } else {
+          console.warn("[beads] Stashed changes restored");
+        }
+      }
+
       if (pullResult.exitCode !== 0) {
         throw new BeadError(
           `Failed to pull: ${pullResult.stderr}`,

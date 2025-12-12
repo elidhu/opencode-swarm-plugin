@@ -541,6 +541,39 @@ function isRetryableError(error: unknown): boolean {
   return false;
 }
 
+/**
+ * Check if an error indicates the project was not found
+ *
+ * This happens when Agent Mail server restarts and loses project registrations.
+ * The fix is to re-register the project and retry the operation.
+ */
+export function isProjectNotFoundError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("project") &&
+      (message.includes("not found") || message.includes("does not exist"))
+    );
+  }
+  return false;
+}
+
+/**
+ * Check if an error indicates the agent was not found
+ *
+ * Similar to project not found - server restart loses agent registrations.
+ */
+export function isAgentNotFoundError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("agent") &&
+      (message.includes("not found") || message.includes("does not exist"))
+    );
+  }
+  return false;
+}
+
 // ============================================================================
 // MCP Client
 // ============================================================================
@@ -821,6 +854,153 @@ export async function mcpCall<T>(
 
   // Should never reach here, but TypeScript needs it
   throw lastError || new Error("Unknown error in mcpCall");
+}
+
+/**
+ * Re-register a project with Agent Mail server
+ *
+ * Called when we detect "Project not found" error, indicating server restart.
+ * This is a lightweight operation that just ensures the project exists.
+ */
+async function reRegisterProject(projectKey: string): Promise<boolean> {
+  try {
+    console.warn(
+      `[agent-mail] Re-registering project "${projectKey}" after server restart...`,
+    );
+    await mcpCall<ProjectInfo>("ensure_project", {
+      human_key: projectKey,
+    });
+    console.warn(
+      `[agent-mail] Project "${projectKey}" re-registered successfully`,
+    );
+    return true;
+  } catch (error) {
+    console.error(
+      `[agent-mail] Failed to re-register project "${projectKey}":`,
+      error,
+    );
+    return false;
+  }
+}
+
+/**
+ * Re-register an agent with Agent Mail server
+ *
+ * Called when we detect "Agent not found" error, indicating server restart.
+ */
+async function reRegisterAgent(
+  projectKey: string,
+  agentName: string,
+  taskDescription?: string,
+): Promise<boolean> {
+  try {
+    console.warn(
+      `[agent-mail] Re-registering agent "${agentName}" for project "${projectKey}"...`,
+    );
+    await mcpCall<AgentInfo>("register_agent", {
+      project_key: projectKey,
+      program: "opencode",
+      model: "claude-opus-4",
+      name: agentName,
+      task_description: taskDescription || "Re-registered after server restart",
+    });
+    console.warn(
+      `[agent-mail] Agent "${agentName}" re-registered successfully`,
+    );
+    return true;
+  } catch (error) {
+    console.error(
+      `[agent-mail] Failed to re-register agent "${agentName}":`,
+      error,
+    );
+    return false;
+  }
+}
+
+/**
+ * MCP call with automatic project/agent re-registration on "not found" errors
+ *
+ * This is the self-healing wrapper that handles Agent Mail server restarts.
+ * When the server restarts, it loses all project and agent registrations.
+ * This wrapper detects those errors and automatically re-registers before retrying.
+ *
+ * Use this instead of raw mcpCall when you have project_key and agent_name context.
+ *
+ * @param toolName - The MCP tool to call
+ * @param args - Arguments including project_key and optionally agent_name
+ * @param options - Optional configuration for re-registration
+ * @returns The result of the MCP call
+ */
+export async function mcpCallWithAutoInit<T>(
+  toolName: string,
+  args: Record<string, unknown> & { project_key: string; agent_name?: string },
+  options?: {
+    /** Task description for agent re-registration */
+    taskDescription?: string;
+    /** Max re-registration attempts (default: 1) */
+    maxReregistrationAttempts?: number;
+  },
+): Promise<T> {
+  const maxAttempts = options?.maxReregistrationAttempts ?? 1;
+  let reregistrationAttempts = 0;
+
+  while (true) {
+    try {
+      return await mcpCall<T>(toolName, args);
+    } catch (error) {
+      // Check if this is a recoverable "not found" error
+      const isProjectError = isProjectNotFoundError(error);
+      const isAgentError = isAgentNotFoundError(error);
+
+      if (!isProjectError && !isAgentError) {
+        // Not a recoverable error, rethrow
+        throw error;
+      }
+
+      // Check if we've exhausted re-registration attempts
+      if (reregistrationAttempts >= maxAttempts) {
+        console.error(
+          `[agent-mail] Exhausted ${maxAttempts} re-registration attempt(s) for ${toolName}`,
+        );
+        throw error;
+      }
+
+      reregistrationAttempts++;
+      console.warn(
+        `[agent-mail] Detected "${isProjectError ? "project" : "agent"} not found" for ${toolName}, ` +
+          `attempting re-registration (attempt ${reregistrationAttempts}/${maxAttempts})...`,
+      );
+
+      // Re-register project first (always needed)
+      const projectOk = await reRegisterProject(args.project_key);
+      if (!projectOk) {
+        throw error; // Can't recover without project
+      }
+
+      // Re-register agent if we have one and it was an agent error
+      // (or if the original call needs an agent)
+      if (args.agent_name && (isAgentError || toolName !== "ensure_project")) {
+        const agentOk = await reRegisterAgent(
+          args.project_key,
+          args.agent_name,
+          options?.taskDescription,
+        );
+        if (!agentOk) {
+          // Agent re-registration failed, but project is OK
+          // Some operations might still work, so continue
+          console.warn(
+            `[agent-mail] Agent re-registration failed, but continuing with retry...`,
+          );
+        }
+      }
+
+      // Retry the original call
+      console.warn(
+        `[agent-mail] Retrying ${toolName} after re-registration...`,
+      );
+      // Loop continues to retry
+    }
+  }
 }
 
 /**
@@ -1490,4 +1670,6 @@ export {
   restartServer,
   RETRY_CONFIG,
   RECOVERY_CONFIG,
+  // Note: isProjectNotFoundError, isAgentNotFoundError, mcpCallWithAutoInit
+  // are exported at their definitions
 };

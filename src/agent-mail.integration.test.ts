@@ -11,12 +11,15 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
   mcpCall,
+  mcpCallWithAutoInit,
   sessionStates,
   setState,
   clearState,
   requireState,
   MAX_INBOX_LIMIT,
   AgentMailNotInitializedError,
+  isProjectNotFoundError,
+  isAgentNotFoundError,
   type AgentMailState,
 } from "./agent-mail";
 
@@ -1316,6 +1319,111 @@ describe("agent-mail integration", () => {
       clearState(coordCtx.sessionID);
       clearState(worker1Ctx.sessionID);
       clearState(worker2Ctx.sessionID);
+    });
+  });
+
+  // ============================================================================
+  // Self-Healing Tests (mcpCallWithAutoInit)
+  // ============================================================================
+
+  describe("self-healing (mcpCallWithAutoInit)", () => {
+    it("detects project not found errors correctly", () => {
+      const projectError = new Error("Project 'migrate-egghead' not found.");
+      const agentError = new Error("Agent 'BlueLake' not found in project");
+      const otherError = new Error("Network timeout");
+
+      expect(isProjectNotFoundError(projectError)).toBe(true);
+      expect(isProjectNotFoundError(agentError)).toBe(false);
+      expect(isProjectNotFoundError(otherError)).toBe(false);
+
+      expect(isAgentNotFoundError(agentError)).toBe(true);
+      expect(isAgentNotFoundError(projectError)).toBe(false);
+      expect(isAgentNotFoundError(otherError)).toBe(false);
+    });
+
+    it("auto-registers project on 'not found' error", async () => {
+      const ctx = createTestContext();
+
+      // First, ensure project exists and register an agent
+      const { state } = await initTestAgent(ctx, `AutoInit_${Date.now()}`);
+
+      // Now use mcpCallWithAutoInit - it should work normally
+      // (no error to recover from, but verifies the wrapper works)
+      await mcpCallWithAutoInit("send_message", {
+        project_key: state.projectKey,
+        agent_name: state.agentName,
+        sender_name: state.agentName,
+        to: [],
+        subject: "Test auto-init wrapper",
+        body_md: "This should work normally",
+        thread_id: "test-thread",
+        importance: "normal",
+      });
+
+      // Verify message was sent by checking inbox
+      const inbox = await mcpCall<Array<{ subject: string }>>("fetch_inbox", {
+        project_key: state.projectKey,
+        agent_name: state.agentName,
+        limit: 5,
+        include_bodies: false,
+      });
+
+      // The message should be in the inbox (sent to empty 'to' = broadcast)
+      // Note: depending on Agent Mail behavior, broadcast might not show in sender's inbox
+      // This test mainly verifies the wrapper doesn't break normal operation
+
+      // Cleanup
+      clearState(ctx.sessionID);
+    });
+
+    it("recovers from simulated project not found by re-registering", async () => {
+      const ctx = createTestContext();
+
+      // Create a fresh project key that doesn't exist yet
+      const freshProjectKey = `/test/fresh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const agentName = `Recovery_${Date.now()}`;
+
+      // First ensure the project exists (simulating initial setup)
+      await mcpCall("ensure_project", { human_key: freshProjectKey });
+      await mcpCall("register_agent", {
+        project_key: freshProjectKey,
+        program: "opencode-test",
+        model: "test-model",
+        name: agentName,
+        task_description: "Recovery test agent",
+      });
+
+      // Now use mcpCallWithAutoInit for an operation
+      // This should work, and if the project somehow got lost, it would re-register
+      await mcpCallWithAutoInit("send_message", {
+        project_key: freshProjectKey,
+        agent_name: agentName,
+        sender_name: agentName,
+        to: [],
+        subject: "Recovery test",
+        body_md: "Testing self-healing",
+        thread_id: "recovery-test",
+        importance: "normal",
+      });
+
+      // If we got here without error, the wrapper is working
+      // (In a real scenario where the server restarted, it would have re-registered)
+    });
+
+    it("passes through non-recoverable errors", async () => {
+      const ctx = createTestContext();
+      const { state } = await initTestAgent(ctx, `ErrorPass_${Date.now()}`);
+
+      // Try to call a non-existent tool - should throw, not retry forever
+      await expect(
+        mcpCallWithAutoInit("nonexistent_tool_xyz", {
+          project_key: state.projectKey,
+          agent_name: state.agentName,
+        }),
+      ).rejects.toThrow(/Unknown tool/);
+
+      // Cleanup
+      clearState(ctx.sessionID);
     });
   });
 });

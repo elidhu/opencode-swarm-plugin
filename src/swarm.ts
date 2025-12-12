@@ -25,7 +25,7 @@ import {
   type SpawnedAgent,
   type Bead,
 } from "./schemas";
-import { mcpCall, requireState } from "./agent-mail";
+import { mcpCall, mcpCallWithAutoInit, requireState } from "./agent-mail";
 import {
   OutcomeSignalsSchema,
   DecompositionStrategySchema,
@@ -1222,7 +1222,7 @@ export const swarm_plan_prompt = tool({
       .number()
       .int()
       .min(2)
-      
+
       .default(5)
       .describe("Maximum number of subtasks (default: 5)"),
     context: tool.schema
@@ -1237,7 +1237,7 @@ export const swarm_plan_prompt = tool({
       .number()
       .int()
       .min(1)
-      
+
       .optional()
       .describe("Max CASS results to include (default: 3)"),
   },
@@ -1352,7 +1352,7 @@ export const swarm_decompose = tool({
       .number()
       .int()
       .min(2)
-      
+
       .default(5)
       .describe("Maximum number of subtasks (default: 5)"),
     context: tool.schema
@@ -1367,7 +1367,7 @@ export const swarm_decompose = tool({
       .number()
       .int()
       .min(1)
-      
+
       .optional()
       .describe("Max CASS results to include (default: 3)"),
   },
@@ -1721,9 +1721,10 @@ export const swarm_progress = tool({
       ? args.bead_id.split(".")[0]
       : args.bead_id;
 
-    // Send progress message to thread
-    await mcpCall("send_message", {
+    // Send progress message to thread (with auto-reinit on server restart)
+    await mcpCallWithAutoInit("send_message", {
       project_key: args.project_key,
+      agent_name: args.agent_name,
       sender_name: args.agent_name,
       to: [], // Coordinator will pick it up from thread
       subject: `Progress: ${args.bead_id} - ${args.status}`,
@@ -1892,8 +1893,10 @@ export const swarm_broadcast = tool({
           : "normal";
 
     // Send as broadcast to thread (empty 'to' = all agents in thread)
-    await mcpCall("send_message", {
+    // Uses auto-reinit wrapper to handle server restarts gracefully
+    await mcpCallWithAutoInit("send_message", {
       project_key: state.projectKey,
+      agent_name: state.agentName,
       sender_name: state.agentName,
       to: [], // Broadcast to thread
       subject: `[${args.importance.toUpperCase()}] Context update from ${state.agentName}`,
@@ -2020,12 +2023,16 @@ export const swarm_complete = tool({
     }
 
     // Release file reservations for this agent
+    // Uses auto-reinit wrapper to handle server restarts - this was the original
+    // failure point that prompted the self-healing implementation
     try {
-      await mcpCall("release_file_reservations", {
+      await mcpCallWithAutoInit("release_file_reservations", {
         project_key: args.project_key,
         agent_name: args.agent_name,
       });
     } catch (error) {
+      // Even with auto-reinit, release might fail (e.g., no reservations existed)
+      // This is non-fatal - log and continue
       console.warn(
         `[swarm] Failed to release file reservations for ${args.agent_name}:`,
         error,
@@ -2053,8 +2060,9 @@ export const swarm_complete = tool({
       .filter(Boolean)
       .join("\n");
 
-    await mcpCall("send_message", {
+    await mcpCallWithAutoInit("send_message", {
       project_key: args.project_key,
+      agent_name: args.agent_name,
       sender_name: args.agent_name,
       to: [], // Thread broadcast
       subject: `Complete: ${args.bead_id}`,
