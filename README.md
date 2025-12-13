@@ -350,6 +350,124 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/m
 | `agentmail_search`           | Search messages by keyword                     |
 | `agentmail_health`           | Check if Agent Mail server is running          |
 
+## Event-Sourced Architecture (Embedded)
+
+The plugin includes an embedded event-sourced Agent Mail implementation as an alternative to the external MCP server. This provides the same multi-agent coordination capabilities without requiring a separate server process.
+
+### Architecture Comparison
+
+**MCP-based (external):**
+
+```
+plugin tools → HTTP → MCP Server (Go process) → SQLite
+```
+
+**Event-sourced (embedded):**
+
+```
+plugin tools → streams/agent-mail.ts → streams/store.ts → PGLite (in-process)
+                                             ↓
+                                    streams/projections.ts
+                                             ↓
+                              Materialized views (agents, messages, reservations)
+                                             ↓
+                                        Fast reads
+```
+
+### Architecture Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Plugin Tools Layer                        │
+│  (agentmail_init, agentmail_send, agentmail_reserve, etc.)      │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     streams/agent-mail.ts                        │
+│                    (High-level API wrapper)                      │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       streams/events.ts                          │
+│        11 event types: agent_registered, message_sent,          │
+│     file_reserved, message_read, message_acked, etc.            │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        streams/store.ts                          │
+│              Append-only event log (PGLite storage)             │
+│       appendEvent() • readEvents() • replayEvents()             │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     streams/projections.ts                       │
+│                  Build materialized views from events            │
+│    getAgents() • getInbox() • getActiveReservations()           │
+│              checkConflicts() • threadStats()                    │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              Materialized Tables (Derived State)                │
+│     agents • messages • reservations • message_reads            │
+│              (Rebuilt by replaying event log)                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Module Descriptions
+
+| Module                     | Responsibility                                                                                     |
+| -------------------------- | -------------------------------------------------------------------------------------------------- |
+| **streams/events.ts**      | Zod schemas for 11 event types (agent_registered, message_sent, file_reserved, task_progress, etc) |
+| **streams/store.ts**       | Append-only event log with PGLite backend (appendEvent, readEvents, replayEvents)                  |
+| **streams/projections.ts** | Materialize views from events (getAgents, getInbox, checkConflicts, threadStats)                   |
+| **streams/agent-mail.ts**  | High-level API matching MCP interface (initAgent, sendAgentMessage, reserveAgentFiles)             |
+| **streams/debug.ts**       | Debugging utilities (debugEvents, debugAgent, debugMessage, inspectState)                          |
+
+### Key Benefits
+
+- **No external dependencies** - Runs in-process with PGLite (Postgres compiled to WASM)
+- **Full audit trail** - Every state change is an immutable event
+- **Crash recovery** - Rebuild state by replaying events from log
+- **Time-travel debugging** - Replay events up to any point in time
+- **Testability** - 127 tests passing across streams module
+- **Durable Streams protocol** - Inspired by Electric SQL's event sourcing patterns
+
+### Event Types
+
+The system emits 11 event types tracked in `streams/events.ts`:
+
+| Event              | Triggered By                          |
+| ------------------ | ------------------------------------- |
+| `agent_registered` | Agent initialization                  |
+| `message_sent`     | Sending inter-agent message           |
+| `file_reserved`    | Reserving files for exclusive editing |
+| `file_released`    | Releasing file reservations           |
+| `message_read`     | Reading a message                     |
+| `message_acked`    | Acknowledging a message               |
+| `task_started`     | Starting work on a bead               |
+| `task_progress`    | Reporting progress update             |
+| `task_completed`   | Completing a bead                     |
+| `task_blocked`     | Marking a task as blocked             |
+| `agent_active`     | Agent heartbeat/keep-alive            |
+
+### Materialized Views
+
+Projections build these derived tables from the event log:
+
+| View            | Contains                                               |
+| --------------- | ------------------------------------------------------ |
+| `agents`        | Registered agents with metadata and last activity      |
+| `messages`      | All inter-agent messages with thread/importance        |
+| `reservations`  | Active file reservations with TTL and exclusivity flag |
+| `message_reads` | Read receipts for message tracking                     |
+
+State is always derived - delete the tables and replay events to rebuild.
+
 ### Structured Output
 
 | Tool                             | Description                                           |
