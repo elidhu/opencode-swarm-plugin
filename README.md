@@ -204,6 +204,7 @@ skills_use(name="swarm-coordination")   # Load swarm workflow
 | `mcp-tool-authoring` | mcp, tools           | Building MCP tools - schema definition, context passing, error handling              |
 | `skill-creator`      | meta, skills         | Guide for creating effective skills                                                  |
 | `swarm-coordination` | swarm, multi-agent   | Multi-agent coordination patterns for swarm workflows                                |
+| `system-design`      | design, architecture | Building reusable systems - deep modules, complexity management, design red flags    |
 
 ### Skill Locations
 
