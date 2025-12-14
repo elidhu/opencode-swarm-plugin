@@ -9,18 +9,18 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
-  swarm_decompose,
-  swarm_validate_decomposition,
-  swarm_status,
-  swarm_progress,
-  swarm_complete,
-  swarm_subtask_prompt,
-  swarm_evaluation_prompt,
-  swarm_select_strategy,
-  swarm_plan_prompt,
+  hive_decompose,
+  hive_validate_decomposition,
+  hive_status,
+  hive_progress,
+  hive_complete,
+  hive_subtask_prompt,
+  hive_evaluation_prompt,
+  hive_select_strategy,
+  hive_plan_prompt,
   formatSubtaskPromptV2,
   SUBTASK_PROMPT_V2,
-} from "./swarm";
+} from "./hive";
 import { mcpCall, setState, clearState, AGENT_MAIL_URL } from "./agent-mail";
 
 // ============================================================================
@@ -70,9 +70,9 @@ async function isBeadsAvailable(): Promise<boolean> {
 // Prompt Generation Tests (No external dependencies)
 // ============================================================================
 
-describe("swarm_decompose", () => {
+describe("hive_decompose", () => {
   it("generates valid decomposition prompt", async () => {
-    const result = await swarm_decompose.execute(
+    const result = await hive_decompose.execute(
       {
         task: "Add user authentication with OAuth",
         max_subtasks: 3,
@@ -90,7 +90,7 @@ describe("swarm_decompose", () => {
   });
 
   it("includes context in prompt when provided", async () => {
-    const result = await swarm_decompose.execute(
+    const result = await hive_decompose.execute(
       {
         task: "Refactor the API routes",
         max_subtasks: 5,
@@ -106,7 +106,7 @@ describe("swarm_decompose", () => {
   });
 
   it("uses default max_subtasks when not provided", async () => {
-    const result = await swarm_decompose.execute(
+    const result = await hive_decompose.execute(
       {
         task: "Simple task",
         max_subtasks: 5, // Explicit default since schema requires it
@@ -125,9 +125,9 @@ describe("swarm_decompose", () => {
 // Strategy Selection Tests
 // ============================================================================
 
-describe("swarm_select_strategy", () => {
+describe("hive_select_strategy", () => {
   it("selects feature-based for 'add' tasks", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Add user authentication with OAuth",
       },
@@ -143,7 +143,7 @@ describe("swarm_select_strategy", () => {
   });
 
   it("selects file-based for 'refactor' tasks", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Refactor all components to use new API",
       },
@@ -157,7 +157,7 @@ describe("swarm_select_strategy", () => {
   });
 
   it("selects risk-based for 'fix security' tasks", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Fix security vulnerability in authentication",
       },
@@ -174,7 +174,7 @@ describe("swarm_select_strategy", () => {
   });
 
   it("defaults to feature-based when no keywords match", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Something completely unrelated without keywords",
       },
@@ -189,7 +189,7 @@ describe("swarm_select_strategy", () => {
   });
 
   it("includes confidence score and reasoning", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Implement new dashboard feature",
       },
@@ -209,7 +209,7 @@ describe("swarm_select_strategy", () => {
   });
 
   it("includes alternative strategies with scores", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Build new payment processing module",
       },
@@ -233,7 +233,7 @@ describe("swarm_select_strategy", () => {
   });
 
   it("includes codebase context in reasoning when provided", async () => {
-    const result = await swarm_select_strategy.execute(
+    const result = await hive_select_strategy.execute(
       {
         task: "Add new API endpoint",
         codebase_context: "Using Express.js with TypeScript and PostgreSQL",
@@ -250,9 +250,9 @@ describe("swarm_select_strategy", () => {
 // Planning Prompt Tests
 // ============================================================================
 
-describe("swarm_plan_prompt", () => {
+describe("hive_plan_prompt", () => {
   it("auto-selects strategy when not specified", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Add user settings page",
         max_subtasks: 3,
@@ -270,7 +270,7 @@ describe("swarm_plan_prompt", () => {
   });
 
   it("uses explicit strategy when provided", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Do something",
         strategy: "risk-based",
@@ -286,7 +286,7 @@ describe("swarm_plan_prompt", () => {
   });
 
   it("includes strategy guidelines in prompt", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Refactor the codebase",
         max_subtasks: 4,
@@ -304,7 +304,7 @@ describe("swarm_plan_prompt", () => {
   });
 
   it("includes anti-patterns in output", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Build new feature",
         max_subtasks: 3,
@@ -320,7 +320,7 @@ describe("swarm_plan_prompt", () => {
   });
 
   it("returns expected_schema and validation_note", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Some task",
         max_subtasks: 5,
@@ -332,7 +332,7 @@ describe("swarm_plan_prompt", () => {
 
     expect(parsed).toHaveProperty("expected_schema", "BeadTree");
     expect(parsed).toHaveProperty("validation_note");
-    expect(parsed.validation_note).toContain("swarm_validate_decomposition");
+    expect(parsed.validation_note).toContain("hive_validate_decomposition");
     expect(parsed).toHaveProperty("schema_hint");
     expect(parsed.schema_hint).toHaveProperty("epic");
     expect(parsed.schema_hint).toHaveProperty("subtasks");
@@ -340,7 +340,7 @@ describe("swarm_plan_prompt", () => {
 
   it("reports CASS status in output (queried flag)", async () => {
     // Test with CASS disabled
-    const resultDisabled = await swarm_plan_prompt.execute(
+    const resultDisabled = await hive_plan_prompt.execute(
       {
         task: "Add feature",
         max_subtasks: 3,
@@ -354,7 +354,7 @@ describe("swarm_plan_prompt", () => {
     expect(parsedDisabled.cass_history.queried).toBe(false);
 
     // Test with CASS enabled (may or may not be available)
-    const resultEnabled = await swarm_plan_prompt.execute(
+    const resultEnabled = await hive_plan_prompt.execute(
       {
         task: "Add feature",
         max_subtasks: 3,
@@ -373,7 +373,7 @@ describe("swarm_plan_prompt", () => {
   });
 
   it("includes context in prompt when provided", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Add user profile",
         max_subtasks: 3,
@@ -389,7 +389,7 @@ describe("swarm_plan_prompt", () => {
   });
 
   it("includes max_subtasks in prompt", async () => {
-    const result = await swarm_plan_prompt.execute(
+    const result = await hive_plan_prompt.execute(
       {
         task: "Build something",
         max_subtasks: 7,
@@ -403,7 +403,7 @@ describe("swarm_plan_prompt", () => {
   });
 });
 
-describe("swarm_validate_decomposition", () => {
+describe("hive_validate_decomposition", () => {
   it("validates correct BeadTree", async () => {
     const validBeadTree = JSON.stringify({
       epic: {
@@ -428,7 +428,7 @@ describe("swarm_validate_decomposition", () => {
       ],
     });
 
-    const result = await swarm_validate_decomposition.execute(
+    const result = await hive_validate_decomposition.execute(
       { response: validBeadTree },
       mockContext,
     );
@@ -465,7 +465,7 @@ describe("swarm_validate_decomposition", () => {
       ],
     });
 
-    const result = await swarm_validate_decomposition.execute(
+    const result = await hive_validate_decomposition.execute(
       { response: conflictingBeadTree },
       mockContext,
     );
@@ -498,7 +498,7 @@ describe("swarm_validate_decomposition", () => {
       ],
     });
 
-    const result = await swarm_validate_decomposition.execute(
+    const result = await hive_validate_decomposition.execute(
       { response: invalidDeps },
       mockContext,
     );
@@ -511,7 +511,7 @@ describe("swarm_validate_decomposition", () => {
   });
 
   it("rejects invalid JSON", async () => {
-    const result = await swarm_validate_decomposition.execute(
+    const result = await hive_validate_decomposition.execute(
       { response: "not valid json {" },
       mockContext,
     );
@@ -528,7 +528,7 @@ describe("swarm_validate_decomposition", () => {
       // No subtasks array
     });
 
-    const result = await swarm_validate_decomposition.execute(
+    const result = await hive_validate_decomposition.execute(
       { response: missingFields },
       mockContext,
     );
@@ -540,9 +540,9 @@ describe("swarm_validate_decomposition", () => {
   });
 });
 
-describe("swarm_subtask_prompt", () => {
+describe("hive_subtask_prompt", () => {
   it("generates complete subtask prompt", async () => {
-    const result = await swarm_subtask_prompt.execute(
+    const result = await hive_subtask_prompt.execute(
       {
         agent_name: "BlueLake",
         bead_id: "bd-abc123.1",
@@ -563,12 +563,12 @@ describe("swarm_subtask_prompt", () => {
     expect(result).toContain("Configure Google OAuth");
     expect(result).toContain("src/auth/google.ts");
     expect(result).toContain("NextAuth.js v5");
-    expect(result).toContain("swarm_progress");
-    expect(result).toContain("swarm_complete");
+    expect(result).toContain("hive_progress");
+    expect(result).toContain("hive_complete");
   });
 
   it("handles missing optional fields", async () => {
-    const result = await swarm_subtask_prompt.execute(
+    const result = await hive_subtask_prompt.execute(
       {
         agent_name: "RedStone",
         bead_id: "bd-xyz789.2",
@@ -587,9 +587,9 @@ describe("swarm_subtask_prompt", () => {
   });
 });
 
-describe("swarm_evaluation_prompt", () => {
+describe("hive_evaluation_prompt", () => {
   it("generates evaluation prompt with schema hint", async () => {
-    const result = await swarm_evaluation_prompt.execute(
+    const result = await hive_evaluation_prompt.execute(
       {
         bead_id: "bd-abc123.1",
         subtask_title: "Add OAuth provider",
@@ -614,7 +614,7 @@ describe("swarm_evaluation_prompt", () => {
   });
 
   it("handles empty files list", async () => {
-    const result = await swarm_evaluation_prompt.execute(
+    const result = await hive_evaluation_prompt.execute(
       {
         bead_id: "bd-xyz789.1",
         subtask_title: "Documentation only",
@@ -633,7 +633,7 @@ describe("swarm_evaluation_prompt", () => {
 // Integration Tests (Require Agent Mail + beads)
 // ============================================================================
 
-describe("swarm_status (integration)", () => {
+describe("hive_status (integration)", () => {
   let beadsAvailable = false;
 
   beforeAll(async () => {
@@ -645,7 +645,7 @@ describe("swarm_status (integration)", () => {
     async () => {
       // This should fail gracefully - no epic exists
       try {
-        await swarm_status.execute(
+        await hive_status.execute(
           {
             epic_id: "bd-nonexistent",
             project_key: TEST_PROJECT_PATH,
@@ -655,7 +655,7 @@ describe("swarm_status (integration)", () => {
         // If it doesn't throw, that's fine too - it might return empty status
       } catch (error) {
         expect(error).toBeInstanceOf(Error);
-        // SwarmError should have operation property
+        // HiveError should have operation property
         if (error instanceof Error && "operation" in error) {
           expect((error as { operation: string }).operation).toBe(
             "query_subtasks",
@@ -666,7 +666,7 @@ describe("swarm_status (integration)", () => {
   );
 });
 
-describe("swarm_progress (integration)", () => {
+describe("hive_progress (integration)", () => {
   let agentMailAvailable = false;
 
   beforeAll(async () => {
@@ -703,7 +703,7 @@ describe("swarm_progress (integration)", () => {
         sessionID,
       };
 
-      const result = await swarm_progress.execute(
+      const result = await hive_progress.execute(
         {
           project_key: uniqueProjectKey,
           agent_name: agent.name,
@@ -725,7 +725,7 @@ describe("swarm_progress (integration)", () => {
   });
 });
 
-describe("swarm_complete (integration)", () => {
+describe("hive_complete (integration)", () => {
   let agentMailAvailable = false;
   let beadsAvailable = false;
 
@@ -790,7 +790,7 @@ describe("swarm_complete (integration)", () => {
           retry_suggestion: null,
         });
 
-        const result = await swarm_complete.execute(
+        const result = await hive_complete.execute(
           {
             project_key: uniqueProjectKey,
             agent_name: agent.name,
@@ -851,7 +851,7 @@ describe("swarm_complete (integration)", () => {
           retry_suggestion: "Add explicit types to the handler function",
         });
 
-        const result = await swarm_complete.execute(
+        const result = await hive_complete.execute(
           {
             project_key: uniqueProjectKey,
             agent_name: agent.name,
@@ -918,7 +918,7 @@ describe("full swarm flow (integration)", () => {
         };
 
         // 2. Generate decomposition prompt
-        const decomposeResult = await swarm_decompose.execute(
+        const decomposeResult = await hive_decompose.execute(
           {
             task: "Add unit tests for auth module",
             max_subtasks: 2,
@@ -960,7 +960,7 @@ describe("full swarm flow (integration)", () => {
         const subtask = JSON.parse(subtaskResult.stdout.toString());
 
         // 5. Generate subtask prompt
-        const subtaskPrompt = await swarm_subtask_prompt.execute(
+        const subtaskPrompt = await hive_subtask_prompt.execute(
           {
             agent_name: agent.name,
             bead_id: subtask.id,
@@ -975,7 +975,7 @@ describe("full swarm flow (integration)", () => {
         expect(subtaskPrompt).toContain(subtask.id);
 
         // 6. Report progress
-        const progressResult = await swarm_progress.execute(
+        const progressResult = await hive_progress.execute(
           {
             project_key: uniqueProjectKey,
             agent_name: agent.name,
@@ -990,7 +990,7 @@ describe("full swarm flow (integration)", () => {
         expect(progressResult).toContain("Progress reported");
 
         // 7. Generate evaluation prompt
-        const evalPromptResult = await swarm_evaluation_prompt.execute(
+        const evalPromptResult = await hive_evaluation_prompt.execute(
           {
             bead_id: subtask.id,
             subtask_title: "Test login flow",
@@ -1003,7 +1003,7 @@ describe("full swarm flow (integration)", () => {
         expect(evalPrompt.expected_schema).toBe("Evaluation");
 
         // 8. Complete the subtask
-        const completeResult = await swarm_complete.execute(
+        const completeResult = await hive_complete.execute(
           {
             project_key: uniqueProjectKey,
             agent_name: agent.name,
@@ -1030,7 +1030,7 @@ describe("full swarm flow (integration)", () => {
         expect(completion.message_sent).toBe(true);
 
         // 9. Check swarm status
-        const statusResult = await swarm_status.execute(
+        const statusResult = await hive_status.execute(
           {
             epic_id: epic.id,
             project_key: uniqueProjectKey,
@@ -1061,7 +1061,7 @@ import {
   withToolFallback,
   ifToolAvailable,
 } from "./tool-availability";
-import { swarm_init } from "./swarm";
+import { hive_init } from "./hive";
 
 describe("Tool Availability", () => {
   beforeAll(() => {
@@ -1128,11 +1128,11 @@ describe("Tool Availability", () => {
   });
 });
 
-describe("swarm_init", () => {
+describe("hive_init", () => {
   it("reports tool availability status", async () => {
     resetToolCache();
 
-    const result = await swarm_init.execute({}, mockContext);
+    const result = await hive_init.execute({}, mockContext);
     const parsed = JSON.parse(result);
 
     expect(parsed).toHaveProperty("ready", true);
@@ -1155,7 +1155,7 @@ describe("swarm_init", () => {
   });
 
   it("includes recommendations", async () => {
-    const result = await swarm_init.execute({}, mockContext);
+    const result = await hive_init.execute({}, mockContext);
     const parsed = JSON.parse(result);
 
     expect(parsed).toHaveProperty("recommendations");
@@ -1165,9 +1165,9 @@ describe("swarm_init", () => {
 });
 
 describe("Graceful Degradation", () => {
-  it("swarm_decompose works without CASS", async () => {
+  it("hive_decompose works without CASS", async () => {
     // This should work regardless of CASS availability
-    const result = await swarm_decompose.execute(
+    const result = await hive_decompose.execute(
       {
         task: "Add user authentication",
         max_subtasks: 3,
@@ -1187,8 +1187,8 @@ describe("Graceful Degradation", () => {
     expect(parsed.cass_history).toHaveProperty("queried");
   });
 
-  it("swarm_decompose can skip CASS explicitly", async () => {
-    const result = await swarm_decompose.execute(
+  it("hive_decompose can skip CASS explicitly", async () => {
+    const result = await hive_decompose.execute(
       {
         task: "Add user authentication",
         max_subtasks: 3,
@@ -1203,7 +1203,7 @@ describe("Graceful Degradation", () => {
   });
 
   it("decomposition prompt includes beads discipline", async () => {
-    const result = await swarm_decompose.execute(
+    const result = await hive_decompose.execute(
       {
         task: "Build feature X",
         max_subtasks: 3,
@@ -1220,7 +1220,7 @@ describe("Graceful Degradation", () => {
   });
 
   it("subtask prompt includes agent-mail discipline", async () => {
-    const result = await swarm_subtask_prompt.execute(
+    const result = await hive_subtask_prompt.execute(
       {
         agent_name: "TestAgent",
         bead_id: "bd-test123.1",
@@ -1231,10 +1231,10 @@ describe("Graceful Degradation", () => {
       mockContext,
     );
 
-    // Check that swarm-mail discipline is in the prompt
+    // Check that hive-mail discipline is in the prompt
     expect(result).toContain("MANDATORY");
     expect(result).toContain("Swarm Mail");
-    expect(result).toContain("swarmmail_send");
+    expect(result).toContain("hivemail_send");
     expect(result).toContain("Report progress");
   });
 });
@@ -1331,11 +1331,11 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
     it("DOES contain Swarm Mail instructions (MANDATORY)", () => {
       // V2 prompt tells agents to USE Swarm Mail - this is non-negotiable
       expect(SUBTASK_PROMPT_V2).toContain("SWARM MAIL");
-      expect(SUBTASK_PROMPT_V2).toContain("swarmmail_init");
-      expect(SUBTASK_PROMPT_V2).toContain("swarmmail_send");
-      expect(SUBTASK_PROMPT_V2).toContain("swarmmail_inbox");
-      expect(SUBTASK_PROMPT_V2).toContain("swarmmail_reserve");
-      expect(SUBTASK_PROMPT_V2).toContain("swarmmail_release");
+      expect(SUBTASK_PROMPT_V2).toContain("hivemail_init");
+      expect(SUBTASK_PROMPT_V2).toContain("hivemail_send");
+      expect(SUBTASK_PROMPT_V2).toContain("hivemail_inbox");
+      expect(SUBTASK_PROMPT_V2).toContain("hivemail_reserve");
+      expect(SUBTASK_PROMPT_V2).toContain("hivemail_release");
       expect(SUBTASK_PROMPT_V2).toContain("thread_id");
       expect(SUBTASK_PROMPT_V2).toContain("non-negotiable");
     });
@@ -1346,7 +1346,7 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
       expect(SUBTASK_PROMPT_V2).toContain("{epic_id}");
       expect(SUBTASK_PROMPT_V2).toContain("beads_update");
       expect(SUBTASK_PROMPT_V2).toContain("beads_create");
-      expect(SUBTASK_PROMPT_V2).toContain("swarm_complete");
+      expect(SUBTASK_PROMPT_V2).toContain("hive_complete");
     });
 
     it("instructs agents to communicate via swarmmail", () => {

@@ -50,10 +50,10 @@ rawScore = success * 0.4 + duration * 0.2 + errors * 0.2 + retries * 0.2;
 
 ### Recording Outcomes
 
-Call `swarm_record_outcome` after subtask completion:
+Call `hive_record_outcome` after subtask completion:
 
 ```typescript
-swarm_record_outcome({
+hive_record_outcome({
   bead_id: "bd-123.1",
   duration_ms: 180000, // 3 minutes
   error_count: 0,
@@ -426,7 +426,7 @@ Use `total` for `error_count` in outcome signals.
 
 ### Integration Points
 
-**1. During decomposition (swarm_plan_prompt):**
+**1. During decomposition (hive_plan_prompt):**
 
 - Query CASS for similar tasks
 - Load pattern maturity records
@@ -439,7 +439,7 @@ Use `total` for `error_count` in outcome signals.
 - Record retry attempts
 - Track duration from start to completion
 
-**3. After completion (swarm_complete):**
+**3. After completion (hive_complete):**
 
 - Record outcome signals
 - Score implicit feedback
@@ -453,7 +453,7 @@ Use `total` for `error_count` in outcome signals.
 // 1. Decomposition phase
 const cass_results = cass_search({ query: "user authentication", limit: 5 });
 const patterns = loadPatterns(); // Get maturity records
-const prompt = swarm_plan_prompt({
+const prompt = hive_plan_prompt({
   task: "Add OAuth",
   context: formatPatternsWithMaturityForPrompt(patterns),
   query_cass: true,
@@ -479,7 +479,7 @@ try {
 const duration = Date.now() - startTime;
 const errorStats = await errorAccumulator.getErrorStats(bead_id);
 
-swarm_record_outcome({
+hive_record_outcome({
   bead_id,
   duration_ms: duration,
   error_count: errorStats.total,

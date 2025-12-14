@@ -16,7 +16,7 @@ import type { Plugin, PluginInput, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { spawn } from "child_process";
 
-const SWARM_CLI = "swarm";
+const HIVE_CLI = "hive";
 
 // =============================================================================
 // CLI Execution Helper
@@ -39,7 +39,7 @@ async function execTool(
       ? ["tool", name, "--json", JSON.stringify(args)]
       : ["tool", name];
 
-    const proc = spawn(SWARM_CLI, cliArgs, {
+    const proc = spawn(HIVE_CLI, cliArgs, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -111,7 +111,7 @@ async function execTool(
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         reject(
           new Error(
-            `swarm CLI not found. Install with: npm install -g opencode-swarm-plugin`,
+            `swarm CLI not found. Install with: npm install -g opencode-hive-plugin`,
           ),
         );
       } else {
@@ -255,7 +255,7 @@ const beads_link_thread = tool({
 // Swarm Mail Tools (Embedded)
 // =============================================================================
 
-const swarmmail_init = tool({
+const hivemail_init = tool({
   description: "Initialize Swarm Mail session (REQUIRED FIRST)",
   args: {
     project_path: tool.schema.string().describe("Absolute path to the project"),
@@ -265,10 +265,10 @@ const swarmmail_init = tool({
       .optional()
       .describe("Task description"),
   },
-  execute: (args, ctx) => execTool("swarmmail_init", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_init", args, ctx),
 });
 
-const swarmmail_send = tool({
+const hivemail_send = tool({
   description: "Send message to other agents via Swarm Mail",
   args: {
     to: tool.schema
@@ -289,10 +289,10 @@ const swarmmail_send = tool({
       .optional()
       .describe("Require acknowledgment"),
   },
-  execute: (args, ctx) => execTool("swarmmail_send", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_send", args, ctx),
 });
 
-const swarmmail_inbox = tool({
+const hivemail_inbox = tool({
   description: "Fetch inbox (CONTEXT-SAFE: bodies excluded, max 5 messages)",
   args: {
     limit: tool.schema
@@ -305,18 +305,18 @@ const swarmmail_inbox = tool({
       .optional()
       .describe("Only urgent messages"),
   },
-  execute: (args, ctx) => execTool("swarmmail_inbox", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_inbox", args, ctx),
 });
 
-const swarmmail_read_message = tool({
+const hivemail_read_message = tool({
   description: "Fetch ONE message body by ID",
   args: {
     message_id: tool.schema.number().describe("Message ID"),
   },
-  execute: (args, ctx) => execTool("swarmmail_read_message", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_read_message", args, ctx),
 });
 
-const swarmmail_reserve = tool({
+const hivemail_reserve = tool({
   description: "Reserve file paths for exclusive editing",
   args: {
     paths: tool.schema
@@ -326,10 +326,10 @@ const swarmmail_reserve = tool({
     exclusive: tool.schema.boolean().optional().describe("Exclusive lock"),
     reason: tool.schema.string().optional().describe("Reservation reason"),
   },
-  execute: (args, ctx) => execTool("swarmmail_reserve", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_reserve", args, ctx),
 });
 
-const swarmmail_release = tool({
+const hivemail_release = tool({
   description: "Release file reservations",
   args: {
     paths: tool.schema
@@ -341,21 +341,21 @@ const swarmmail_release = tool({
       .optional()
       .describe("Reservation IDs"),
   },
-  execute: (args, ctx) => execTool("swarmmail_release", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_release", args, ctx),
 });
 
-const swarmmail_ack = tool({
+const hivemail_ack = tool({
   description: "Acknowledge a message",
   args: {
     message_id: tool.schema.number().describe("Message ID"),
   },
-  execute: (args, ctx) => execTool("swarmmail_ack", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_ack", args, ctx),
 });
 
-const swarmmail_health = tool({
+const hivemail_health = tool({
   description: "Check Swarm Mail database health",
   args: {},
-  execute: (args, ctx) => execTool("swarmmail_health", args, ctx),
+  execute: (args, ctx) => execTool("hivemail_health", args, ctx),
 });
 
 // =============================================================================
@@ -415,15 +415,15 @@ const structured_parse_bead_tree = tool({
 // Swarm Tools
 // =============================================================================
 
-const swarm_init = tool({
+const hive_init = tool({
   description: "Initialize swarm session and check tool availability",
   args: {
     project_path: tool.schema.string().optional().describe("Project path"),
   },
-  execute: (args, ctx) => execTool("swarm_init", args, ctx),
+  execute: (args, ctx) => execTool("hive_init", args, ctx),
 });
 
-const swarm_select_strategy = tool({
+const hive_select_strategy = tool({
   description: "Analyze task and recommend decomposition strategy",
   args: {
     task: tool.schema.string().min(1).describe("Task to analyze"),
@@ -432,10 +432,10 @@ const swarm_select_strategy = tool({
       .optional()
       .describe("Codebase context"),
   },
-  execute: (args, ctx) => execTool("swarm_select_strategy", args, ctx),
+  execute: (args, ctx) => execTool("hive_select_strategy", args, ctx),
 });
 
-const swarm_plan_prompt = tool({
+const hive_plan_prompt = tool({
   description: "Generate strategy-specific decomposition prompt",
   args: {
     task: tool.schema.string().min(1).describe("Task to decompose"),
@@ -463,10 +463,10 @@ const swarm_plan_prompt = tool({
       .optional()
       .describe("CASS limit"),
   },
-  execute: (args, ctx) => execTool("swarm_plan_prompt", args, ctx),
+  execute: (args, ctx) => execTool("hive_plan_prompt", args, ctx),
 });
 
-const swarm_decompose = tool({
+const hive_decompose = tool({
   description: "Generate decomposition prompt for breaking task into subtasks",
   args: {
     task: tool.schema.string().min(1).describe("Task to decompose"),
@@ -487,27 +487,27 @@ const swarm_decompose = tool({
       .optional()
       .describe("CASS limit"),
   },
-  execute: (args, ctx) => execTool("swarm_decompose", args, ctx),
+  execute: (args, ctx) => execTool("hive_decompose", args, ctx),
 });
 
-const swarm_validate_decomposition = tool({
+const hive_validate_decomposition = tool({
   description: "Validate a decomposition response against BeadTreeSchema",
   args: {
     response: tool.schema.string().describe("Decomposition response"),
   },
-  execute: (args, ctx) => execTool("swarm_validate_decomposition", args, ctx),
+  execute: (args, ctx) => execTool("hive_validate_decomposition", args, ctx),
 });
 
-const swarm_status = tool({
+const hive_status = tool({
   description: "Get status of a swarm by epic ID",
   args: {
     epic_id: tool.schema.string().describe("Epic bead ID"),
     project_key: tool.schema.string().describe("Project key"),
   },
-  execute: (args, ctx) => execTool("swarm_status", args, ctx),
+  execute: (args, ctx) => execTool("hive_status", args, ctx),
 });
 
-const swarm_progress = tool({
+const hive_progress = tool({
   description: "Report progress on a subtask to coordinator",
   args: {
     project_key: tool.schema.string().describe("Project key"),
@@ -528,10 +528,10 @@ const swarm_progress = tool({
       .optional()
       .describe("Files modified"),
   },
-  execute: (args, ctx) => execTool("swarm_progress", args, ctx),
+  execute: (args, ctx) => execTool("hive_progress", args, ctx),
 });
 
-const swarm_complete = tool({
+const hive_complete = tool({
   description:
     "Mark subtask complete, release reservations, notify coordinator",
   args: {
@@ -546,10 +546,10 @@ const swarm_complete = tool({
       .describe("Files modified"),
     skip_ubs_scan: tool.schema.boolean().optional().describe("Skip UBS scan"),
   },
-  execute: (args, ctx) => execTool("swarm_complete", args, ctx),
+  execute: (args, ctx) => execTool("hive_complete", args, ctx),
 });
 
-const swarm_record_outcome = tool({
+const hive_record_outcome = tool({
   description: "Record subtask outcome for implicit feedback scoring",
   args: {
     bead_id: tool.schema.string().describe("Bead ID"),
@@ -580,10 +580,10 @@ const swarm_record_outcome = tool({
       .optional()
       .describe("Strategy used"),
   },
-  execute: (args, ctx) => execTool("swarm_record_outcome", args, ctx),
+  execute: (args, ctx) => execTool("hive_record_outcome", args, ctx),
 });
 
-const swarm_subtask_prompt = tool({
+const hive_subtask_prompt = tool({
   description: "Generate the prompt for a spawned subtask agent",
   args: {
     agent_name: tool.schema.string().describe("Agent name"),
@@ -597,10 +597,10 @@ const swarm_subtask_prompt = tool({
     files: tool.schema.array(tool.schema.string()).describe("Files to work on"),
     shared_context: tool.schema.string().optional().describe("Shared context"),
   },
-  execute: (args, ctx) => execTool("swarm_subtask_prompt", args, ctx),
+  execute: (args, ctx) => execTool("hive_subtask_prompt", args, ctx),
 });
 
-const swarm_spawn_subtask = tool({
+const hive_spawn_subtask = tool({
   description: "Prepare a subtask for spawning with Task tool",
   args: {
     bead_id: tool.schema.string().describe("Bead ID"),
@@ -613,10 +613,10 @@ const swarm_spawn_subtask = tool({
     files: tool.schema.array(tool.schema.string()).describe("Files to work on"),
     shared_context: tool.schema.string().optional().describe("Shared context"),
   },
-  execute: (args, ctx) => execTool("swarm_spawn_subtask", args, ctx),
+  execute: (args, ctx) => execTool("hive_spawn_subtask", args, ctx),
 });
 
-const swarm_complete_subtask = tool({
+const hive_complete_subtask = tool({
   description: "Handle subtask completion after Task agent returns",
   args: {
     bead_id: tool.schema.string().describe("Bead ID"),
@@ -626,10 +626,10 @@ const swarm_complete_subtask = tool({
       .optional()
       .describe("Files modified"),
   },
-  execute: (args, ctx) => execTool("swarm_complete_subtask", args, ctx),
+  execute: (args, ctx) => execTool("hive_complete_subtask", args, ctx),
 });
 
-const swarm_evaluation_prompt = tool({
+const hive_evaluation_prompt = tool({
   description: "Generate self-evaluation prompt for a completed subtask",
   args: {
     bead_id: tool.schema.string().describe("Bead ID"),
@@ -638,7 +638,7 @@ const swarm_evaluation_prompt = tool({
       .array(tool.schema.string())
       .describe("Files modified"),
   },
-  execute: (args, ctx) => execTool("swarm_evaluation_prompt", args, ctx),
+  execute: (args, ctx) => execTool("hive_evaluation_prompt", args, ctx),
 });
 
 // =============================================================================
@@ -754,7 +754,7 @@ const skills_execute = tool({
 // Plugin Export
 // =============================================================================
 
-export const SwarmPlugin: Plugin = async (
+export const HivePlugin: Plugin = async (
   _input: PluginInput,
 ): Promise<Hooks> => {
   return {
@@ -770,14 +770,14 @@ export const SwarmPlugin: Plugin = async (
       beads_sync,
       beads_link_thread,
       // Swarm Mail (Embedded)
-      swarmmail_init,
-      swarmmail_send,
-      swarmmail_inbox,
-      swarmmail_read_message,
-      swarmmail_reserve,
-      swarmmail_release,
-      swarmmail_ack,
-      swarmmail_health,
+      hivemail_init,
+      hivemail_send,
+      hivemail_inbox,
+      hivemail_read_message,
+      hivemail_reserve,
+      hivemail_release,
+      hivemail_ack,
+      hivemail_health,
       // Structured
       structured_extract_json,
       structured_validate,
@@ -785,19 +785,19 @@ export const SwarmPlugin: Plugin = async (
       structured_parse_decomposition,
       structured_parse_bead_tree,
       // Swarm
-      swarm_init,
-      swarm_select_strategy,
-      swarm_plan_prompt,
-      swarm_decompose,
-      swarm_validate_decomposition,
-      swarm_status,
-      swarm_progress,
-      swarm_complete,
-      swarm_record_outcome,
-      swarm_subtask_prompt,
-      swarm_spawn_subtask,
-      swarm_complete_subtask,
-      swarm_evaluation_prompt,
+      hive_init,
+      hive_select_strategy,
+      hive_plan_prompt,
+      hive_decompose,
+      hive_validate_decomposition,
+      hive_status,
+      hive_progress,
+      hive_complete,
+      hive_record_outcome,
+      hive_subtask_prompt,
+      hive_spawn_subtask,
+      hive_complete_subtask,
+      hive_evaluation_prompt,
       // Skills
       skills_list,
       skills_read,
@@ -812,4 +812,4 @@ export const SwarmPlugin: Plugin = async (
   };
 };
 
-export default SwarmPlugin;
+export default HivePlugin;

@@ -283,9 +283,9 @@ describe("guardrailOutput", () => {
     const samplesToTest = [
       "beads_create",
       "agentmail_send",
-      "swarmmail_inbox",
+      "hivemail_inbox",
       "structured_validate",
-      "swarm_complete",
+      "hive_complete",
       "mandate_query",
     ];
 
@@ -364,9 +364,9 @@ describe("DEFAULT_GUARDRAIL_CONFIG", () => {
       "beads_create",
       "beads_sync",
       "agentmail_init",
-      "swarmmail_send",
+      "hivemail_send",
       "structured_parse_evaluation",
-      "swarm_decompose",
+      "hive_decompose",
       "mandate_file",
     ];
 

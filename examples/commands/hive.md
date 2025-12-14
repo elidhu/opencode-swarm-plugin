@@ -17,7 +17,7 @@ $ARGUMENTS
 
 ## MANDATORY: Swarm Mail
 
-**ALL coordination MUST use `swarmmail_*` tools.** This is non-negotiable.
+**ALL coordination MUST use `hivemail_*` tools.** This is non-negotiable.
 
 Swarm Mail is embedded (no external server needed) and provides:
 
@@ -73,7 +73,7 @@ Which approach, or should I explore something else?
 ### 1. Initialize Swarm Mail (FIRST)
 
 ```bash
-swarmmail_init(project_path="$PWD", task_description="Swarm: <task summary>")
+hivemail_init(project_path="$PWD", task_description="Swarm: <task summary>")
 ```
 
 This registers you as the coordinator agent.
@@ -100,7 +100,7 @@ skills_list()
 
 ```bash
 # For swarm coordination (ALWAYS load this)
-skills_use(name="swarm-coordination")
+skills_use(name="hive-coordination")
 
 # For architectural decisions
 skills_use(name="system-design")
@@ -138,11 +138,11 @@ git push -u origin HEAD
 
 ```bash
 # This pollutes your main thread context
-swarm_select_strategy(task="<the task>")
-swarm_plan_prompt(task="<the task>", ...)
+hive_select_strategy(task="<the task>")
+hive_plan_prompt(task="<the task>", ...)
 # ... you reason about decomposition inline ...
 # ... context fills with file contents, analysis ...
-swarm_validate_decomposition(response="...")
+hive_validate_decomposition(response="...")
 ```
 
 **✅ Do this (delegate to subagent):**
@@ -165,11 +165,11 @@ You are a swarm planner. Generate a BeadTree for this task.
 <from knowledge gathering step 2>
 
 ## Instructions
-1. Use swarm_select_strategy(task=\"...\")
-2. Use swarm_plan_prompt(task=\"...\", max_subtasks=5, query_cass=true)
+1. Use hive_select_strategy(task=\"...\")
+2. Use hive_plan_prompt(task=\"...\", max_subtasks=5, query_cass=true)
 3. Reason about decomposition strategy
 4. Generate BeadTree JSON
-5. Validate with swarm_validate_decomposition
+5. Validate with hive_validate_decomposition
 6. Return ONLY the validated BeadTree JSON (no analysis)
 
 Output: Valid BeadTree JSON only.
@@ -203,7 +203,7 @@ Rules:
 ### 6. Reserve Files (via Swarm Mail)
 
 ```bash
-swarmmail_reserve(paths=[<files>], reason="<bead-id>: <description>", ttl_seconds=3600)
+hivemail_reserve(paths=[<files>], reason="<bead-id>: <description>", ttl_seconds=3600)
 ```
 
 No two agents should edit the same file. Reservations prevent conflicts.
@@ -215,7 +215,7 @@ No two agents should edit the same file. Reservations prevent conflicts.
 For each subtask:
 
 ```bash
-swarm_spawn_subtask(
+hive_spawn_subtask(
   bead_id="<id>",
   epic_id="<epic>",
   subtask_title="<title>",
@@ -232,7 +232,7 @@ swarm_spawn_subtask(
 Load these skills before starting work:
 
 - skills_use(name="testing-patterns") - if adding tests or breaking dependencies
-- skills_use(name="swarm-coordination") - if coordinating with other agents
+- skills_use(name="hive-coordination") - if coordinating with other agents
 - skills_use(name="system-design") - if making architectural decisions
 - skills_use(name="cli-builder") - if working on CLI components
 
@@ -242,15 +242,15 @@ See full skill list with skills_list().
 Then spawn:
 
 ```bash
-Task(subagent_type="swarm/worker", description="<bead-title>", prompt="<from swarm_spawn_subtask>")
+Task(subagent_type="swarm/worker", description="<bead-title>", prompt="<from hive_spawn_subtask>")
 ```
 
 ### 8. Monitor (unless --no-sync)
 
 ```bash
-swarm_status(epic_id="<epic-id>", project_key="$PWD")
-swarmmail_inbox()  # Check for worker messages
-swarmmail_read_message(message_id=N)  # Read specific message
+hive_status(epic_id="<epic-id>", project_key="$PWD")
+hivemail_inbox()  # Check for worker messages
+hivemail_read_message(message_id=N)  # Read specific message
 ```
 
 **Intervention triggers:**
@@ -263,14 +263,14 @@ swarmmail_read_message(message_id=N)  # Read specific message
 If incompatibilities spotted, broadcast:
 
 ```bash
-swarmmail_send(to=["*"], subject="Coordinator Update", body="<guidance>", importance="high", thread_id="<epic-id>")
+hivemail_send(to=["*"], subject="Coordinator Update", body="<guidance>", importance="high", thread_id="<epic-id>")
 ```
 
 ### 9. Complete
 
 ```bash
-swarm_complete(project_key="$PWD", agent_name="<your-name>", bead_id="<epic-id>", summary="<done>", files_touched=[...])
-swarmmail_release()  # Release any remaining reservations
+hive_complete(project_key="$PWD", agent_name="<your-name>", bead_id="<epic-id>", summary="<done>", files_touched=[...])
+hivemail_release()  # Release any remaining reservations
 beads_sync()
 ```
 
@@ -284,21 +284,21 @@ gh pr create --title "feat: <epic title>" --body "## Summary\n<bullets>\n\n## Be
 
 | Tool                     | Purpose                             |
 | ------------------------ | ----------------------------------- |
-| `swarmmail_init`         | Initialize session (REQUIRED FIRST) |
-| `swarmmail_send`         | Send message to agents              |
-| `swarmmail_inbox`        | Check inbox (max 5, no bodies)      |
-| `swarmmail_read_message` | Read specific message body          |
-| `swarmmail_reserve`      | Reserve files for exclusive editing |
-| `swarmmail_release`      | Release file reservations           |
-| `swarmmail_ack`          | Acknowledge message                 |
-| `swarmmail_health`       | Check database health               |
+| `hivemail_init`         | Initialize session (REQUIRED FIRST) |
+| `hivemail_send`         | Send message to agents              |
+| `hivemail_inbox`        | Check inbox (max 5, no bodies)      |
+| `hivemail_read_message` | Read specific message body          |
+| `hivemail_reserve`      | Reserve files for exclusive editing |
+| `hivemail_release`      | Release file reservations           |
+| `hivemail_ack`          | Acknowledge message                 |
+| `hivemail_health`       | Check database health               |
 
 ## Strategy Reference
 
 | Strategy       | Best For                 | Keywords                              | Recommended Skills                |
 | -------------- | ------------------------ | ------------------------------------- | --------------------------------- |
 | file-based     | Refactoring, migrations  | refactor, migrate, rename, update all | system-design, testing-patterns   |
-| feature-based  | New features             | add, implement, build, create, new    | system-design, swarm-coordination |
+| feature-based  | New features             | add, implement, build, create, new    | system-design, hive-coordination |
 | risk-based     | Bug fixes, security      | fix, bug, security, critical, urgent  | testing-patterns                  |
 | research-based | Investigation, discovery | research, investigate, explore, learn | system-design                     |
 
@@ -311,7 +311,7 @@ gh pr create --title "feat: <epic title>" --body "## Summary\n<bullets>\n\n## Be
 | Contains "test"        | `skills_use(name="testing-patterns")`                   |
 | Contains "refactor"    | `skills_use(name="testing-patterns")` + `system-design` |
 | Contains "CLI"         | `skills_use(name="cli-builder")`                        |
-| Multi-agent work       | `skills_use(name="swarm-coordination")`                 |
+| Multi-agent work       | `skills_use(name="hive-coordination")`                 |
 | Architecture decisions | `skills_use(name="system-design")`                      |
 | Breaking dependencies  | `skills_use(name="testing-patterns")`                   |
 
@@ -324,7 +324,7 @@ gh pr create --title "feat: <epic title>" --body "## Summary\n<bullets>\n\n## Be
 | **Delegate planning to subagent**  | Decomposition reasoning + file reads consume huge context |
 | **Never read 10+ files inline**    | Use subagent to read + summarize                          |
 | **Limit CASS queries**             | One query per domain, delegate deep searching             |
-| **Use swarmmail_inbox carefully**  | Max 5 messages, no bodies by default                      |
+| **Use hivemail_inbox carefully**  | Max 5 messages, no bodies by default                      |
 | **Receive JSON only from planner** | No analysis, no file contents, just structure             |
 
 **Pattern: Delegate → Receive Summary → Act**
@@ -333,14 +333,14 @@ Not: Do Everything Inline → Run Out of Context → Fail
 
 ## Quick Checklist
 
-- [ ] **swarmmail_init** called FIRST
+- [ ] **hivemail_init** called FIRST
 - [ ] Knowledge gathered (semantic-memory, CASS, pdf-brain, skills)
 - [ ] **Planning delegated to swarm/planner subagent** (NOT inline)
 - [ ] BeadTree validated (no file conflicts)
 - [ ] Epic + subtasks created
-- [ ] Files reserved via **swarmmail_reserve**
+- [ ] Files reserved via **hivemail_reserve**
 - [ ] Workers spawned in parallel
-- [ ] Progress monitored via **swarmmail_inbox** (limit=5, no bodies)
+- [ ] Progress monitored via **hivemail_inbox** (limit=5, no bodies)
 - [ ] PR created (or pushed to main)
 - [ ] **ASCII art session summary** (MANDATORY - see below)
 
@@ -402,4 +402,4 @@ Not: Do Everything Inline → Run Out of Context → Fail
 
 **This is not optional.** Make it beautiful. Make it memorable. PRs get shared.
 
-Begin with swarmmail_init and knowledge gathering now.
+Begin with hivemail_init and knowledge gathering now.

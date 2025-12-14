@@ -33,15 +33,15 @@ The coordinator synthesizes findings into `shared_context` that all workers rece
 After knowledge gathering:
 
 1. Select strategy (auto or explicit)
-2. Generate decomposition with `swarm_plan_prompt` or `swarm_decompose`
-3. Validate with `swarm_validate_decomposition`
+2. Generate decomposition with `hive_plan_prompt` or `hive_decompose`
+3. Validate with `hive_validate_decomposition`
 4. Create beads with `beads_create_epic`
 
 ### 3. Worker Spawning
 
 For each subtask:
 
-1. Generate worker prompt with `swarm_spawn_subtask`
+1. Generate worker prompt with `hive_spawn_subtask`
 2. Include relevant skills in prompt
 3. Spawn worker agent via Task tool
 4. Track bead status
@@ -49,7 +49,7 @@ For each subtask:
 ### 4. Progress Monitoring
 
 - Check `beads_query(status="in_progress")` for active work
-- Check `swarmmail_inbox()` for worker messages
+- Check `hivemail_inbox()` for worker messages
 - Intervene on blockers (see Intervention Patterns below)
 
 ### 5. Completion & Aggregation
@@ -63,9 +63,9 @@ For each subtask:
 
 ## Decision Points
 
-### When to Swarm vs Single Agent
+### When to Hive vs Single Agent
 
-**Swarm when:**
+**Hive when:**
 
 - 3+ files need modification
 - Task has natural parallel boundaries
@@ -210,11 +210,11 @@ For long-running swarms, compress context periodically:
 
 **Fix:** Coordinator only orchestrates. If you're writing code, you're a worker.
 
-### The Silent Swarm
+### The Silent Hive
 
 **Problem:** Workers don't communicate, coordinator doesn't monitor.
 
-**Symptom:** Swarm runs for 30 minutes, then fails with conflicts.
+**Symptom:** Hive runs for 30 minutes, then fails with conflicts.
 
 **Fix:** Require progress updates. Check inbox regularly. Intervene early.
 

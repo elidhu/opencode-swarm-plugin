@@ -353,7 +353,7 @@ async function debugEventsPaginated(
     offset += batchSize;
 
     console.log(
-      `[SwarmMail] Fetched ${allEvents.length} events (batch size: ${batchSize})`,
+      `[HiveMail] Fetched ${allEvents.length} events (batch size: ${batchSize})`,
     );
   }
 

@@ -1,12 +1,12 @@
 {
-  "name": "opencode-swarm-plugin",
+  "name": "opencode-hive-plugin",
   "version": "0.20.0",
-  "description": "Multi-agent swarm coordination for OpenCode with learning capabilities, beads integration, and Agent Mail",
+  "description": "Multi-agent hive coordination for OpenCode",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "swarm": "./bin/swarm.ts"
+    "hive": "./bin/hive.ts"
   },
   "exports": {
     ".": {
@@ -23,8 +23,8 @@
     "test": "bun test src/schemas src/skills.test.ts src/streams/index.test.ts src/streams/events.test.ts src/streams/projections.test.ts src/streams/migrations.test.ts src/streams/debug.test.ts src/streams/agent-mail.test.ts src/streams/effect/deferred.test.ts src/streams/effect/mailbox.test.ts",
     "test:watch": "bun test --watch src/schemas src/skills.test.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:swarm": "bun test src/swarm-mail.integration.test.ts",
-    "test:all": "bun run test && bun run test:swarm",
+    "test:hive": "bun test src/hive-mail.integration.test.ts",
+    "test:all": "bun run test && bun run test:hive",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "eval:dev": "evalite watch evals/",
@@ -42,7 +42,6 @@
     "@opencode-ai/plugin": "^1.0.134",
     "effect": "^3.19.12",
     "gray-matter": "^4.0.3",
-    "ioredis": "^5.4.1",
     "minimatch": "^10.1.1",
     "nanoid": "^5.1.6",
     "zod": "4.1.8"
@@ -62,12 +61,9 @@
   "keywords": [
     "opencode",
     "plugin",
-    "swarm",
-    "agent-mail",
+    "hive",
     "beads",
     "multi-agent",
-    "ai-agents",
-    "machine-learning",
     "task-decomposition",
     "coordination"
   ],
@@ -75,6 +71,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/joelhooks/opencode-swarm-plugin"
+    "url": "https://github.com/elidhu/opencode-hive-plugin"
   }
 }

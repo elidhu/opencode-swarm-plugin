@@ -11,13 +11,13 @@
  *
  * @example
  * // ✅ CORRECT - only export the plugin function
- * export default SwarmPlugin;
+ * export default HivePlugin;
  *
  * // ❌ WRONG - will break plugin loading
  * export const VERSION = "1.0.0";
  * export class Helper {}
  */
-import { SwarmPlugin } from "./index";
+import { HivePlugin } from "./index";
 
 // Only export the plugin function - nothing else!
-export { SwarmPlugin };
+export { HivePlugin };

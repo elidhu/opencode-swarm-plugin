@@ -19,16 +19,16 @@ import {
   POSITIVE_MARKERS,
   NEGATIVE_MARKERS,
   type DecompositionStrategy,
-} from "./swarm-strategies";
+} from "./hive-strategies";
 
 // ============================================================================
-// Decomposition Prompt (temporary - will be moved to swarm-prompts.ts)
+// Decomposition Prompt (temporary - will be moved to hive-prompts.ts)
 // ============================================================================
 
 /**
  * Prompt for decomposing a task into parallelizable subtasks.
  *
- * Used by swarm_decompose to instruct the agent on how to break down work.
+ * Used by hive_decompose to instruct the agent on how to break down work.
  * The agent responds with a BeadTree that gets validated.
  */
 const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a swarm of agents.
@@ -110,8 +110,6 @@ const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into paralleli
 {strategy_guidelines}
 
 {context_section}
-
-{cass_history}
 
 {skills_context}
 
@@ -313,111 +311,6 @@ export function detectFileConflicts(
 }
 
 // ============================================================================
-// CASS History Integration
-// ============================================================================
-
-/**
- * CASS search result from similar past tasks
- */
-interface CassSearchResult {
-  query: string;
-  results: Array<{
-    source_path: string;
-    line: number;
-    agent: string;
-    preview: string;
-    score: number;
-  }>;
-}
-
-/**
- * CASS query result with status
- */
-type CassQueryResult =
-  | { status: "unavailable" }
-  | { status: "failed"; error?: string }
-  | { status: "empty"; query: string }
-  | { status: "success"; data: CassSearchResult };
-
-/**
- * Query CASS for similar past tasks
- *
- * @param task - Task description to search for
- * @param limit - Maximum results to return
- * @returns Structured result with status indicator
- */
-async function queryCassHistory(
-  task: string,
-  limit: number = 3,
-): Promise<CassQueryResult> {
-  // Check if CASS is available
-  try {
-    const result = await Bun.$`cass search ${task} --limit ${limit} --json`
-      .quiet()
-      .nothrow();
-
-    if (result.exitCode !== 0) {
-      const error = result.stderr.toString();
-      console.warn(
-        `[swarm] CASS search failed (exit ${result.exitCode}):`,
-        error,
-      );
-      return { status: "failed", error };
-    }
-
-    const output = result.stdout.toString();
-    if (!output.trim()) {
-      return { status: "empty", query: task };
-    }
-
-    try {
-      const parsed = JSON.parse(output);
-      const searchResult: CassSearchResult = {
-        query: task,
-        results: Array.isArray(parsed) ? parsed : parsed.results || [],
-      };
-
-      if (searchResult.results.length === 0) {
-        return { status: "empty", query: task };
-      }
-
-      return { status: "success", data: searchResult };
-    } catch (error) {
-      console.warn(`[swarm] Failed to parse CASS output:`, error);
-      return { status: "failed", error: String(error) };
-    }
-  } catch (error) {
-    console.error(`[swarm] CASS query error:`, error);
-    return { status: "unavailable" };
-  }
-}
-
-/**
- * Format CASS history for inclusion in decomposition prompt
- */
-function formatCassHistoryForPrompt(history: CassSearchResult): string {
-  if (history.results.length === 0) {
-    return "";
-  }
-
-  const lines = [
-    "## Similar Past Tasks",
-    "",
-    "These similar tasks were found in agent history:",
-    "",
-    ...history.results.slice(0, 3).map((r, i) => {
-      const preview = r.preview.slice(0, 200).replace(/\n/g, " ");
-      return `${i + 1}. [${r.agent}] ${preview}...`;
-    }),
-    "",
-    "Consider patterns that worked in these past tasks.",
-    "",
-  ];
-
-  return lines.join("\n");
-}
-
-// ============================================================================
 // Tool Definitions
 // ============================================================================
 
@@ -429,9 +322,9 @@ function formatCassHistoryForPrompt(history: CassSearchResult): string {
  *
  * Optionally queries CASS for similar past tasks to inform decomposition.
  */
-export const swarm_decompose = tool({
+export const hive_decompose = tool({
   description:
-    "Generate decomposition prompt for breaking task into parallelizable subtasks. Optionally queries CASS for similar past tasks.",
+    "Generate decomposition prompt for breaking task into parallelizable subtasks.",
   args: {
     task: tool.schema.string().min(1).describe("Task description to decompose"),
     max_subtasks: tool.schema
@@ -445,70 +338,18 @@ export const swarm_decompose = tool({
       .string()
       .optional()
       .describe("Additional context (codebase info, constraints, etc.)"),
-    query_cass: tool.schema
-      .boolean()
-      .optional()
-      .describe("Query CASS for similar past tasks (default: true)"),
-    cass_limit: tool.schema
-      .number()
-      .int()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe("Max CASS results to include (default: 3)"),
   },
   async execute(args) {
-    // Import needed modules
     const { formatMemoryQueryForDecomposition } = await import("./learning");
 
-    // Query CASS for similar past tasks
-    let cassContext = "";
-    let cassResultInfo: {
-      queried: boolean;
-      results_found?: number;
-      included_in_context?: boolean;
-      reason?: string;
-    };
-
-    if (args.query_cass !== false) {
-      const cassResult = await queryCassHistory(
-        args.task,
-        args.cass_limit ?? 3,
-      );
-      if (cassResult.status === "success") {
-        cassContext = formatCassHistoryForPrompt(cassResult.data);
-        cassResultInfo = {
-          queried: true,
-          results_found: cassResult.data.results.length,
-          included_in_context: true,
-        };
-      } else {
-        cassResultInfo = {
-          queried: true,
-          results_found: 0,
-          included_in_context: false,
-          reason: cassResult.status,
-        };
-      }
-    } else {
-      cassResultInfo = { queried: false, reason: "disabled" };
-    }
-
-    // Combine user context with CASS history
-    const fullContext = [args.context, cassContext]
-      .filter(Boolean)
-      .join("\n\n");
-
-    // Format the decomposition prompt
-    const contextSection = fullContext
-      ? `## Additional Context\n${fullContext}`
+    const contextSection = args.context
+      ? `## Additional Context\n${args.context}`
       : "## Additional Context\n(none provided)";
 
     const prompt = DECOMPOSITION_PROMPT.replace("{task}", args.task)
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString())
       .replace("{context_section}", contextSection);
 
-    // Return the prompt and schema info for the caller
     return JSON.stringify(
       {
         prompt,
@@ -527,8 +368,6 @@ export const swarm_decompose = tool({
         },
         validation_note:
           "Parse agent response as JSON and validate with BeadTreeSchema from schemas/bead.ts",
-        cass_history: cassResultInfo,
-        // Add semantic-memory query instruction
         memory_query: formatMemoryQueryForDecomposition(args.task, 3),
       },
       null,
@@ -542,7 +381,7 @@ export const swarm_decompose = tool({
  *
  * Use this after the agent responds to swarm:decompose to validate the structure.
  */
-export const swarm_validate_decomposition = tool({
+export const hive_validate_decomposition = tool({
   description: "Validate a decomposition response against BeadTreeSchema",
   args: {
     response: tool.schema
@@ -659,7 +498,7 @@ export const swarm_validate_decomposition = tool({
 });
 
 /**
- * Delegate task decomposition to a swarm/planner subagent
+ * Delegate task decomposition to a hive/planner subagent
  *
  * Returns a prompt for spawning a planner agent that will handle all decomposition
  * reasoning. This keeps the coordinator context lean by offloading:
@@ -675,7 +514,7 @@ export const swarm_validate_decomposition = tool({
  * @example
  * ```typescript
  * // Coordinator workflow:
- * const delegateResult = await swarm_delegate_planning({
+ * const delegateResult = await hive_delegate_planning({
  *   task: "Add user authentication",
  *   context: "Next.js 14 app",
  * });
@@ -687,12 +526,12 @@ export const swarm_validate_decomposition = tool({
  * const plannerResponse = await Task(prompt, subagent_type);
  *
  * // Validate the response
- * await swarm_validate_decomposition({ response: plannerResponse });
+ * await hive_validate_decomposition({ response: plannerResponse });
  * ```
  */
-export const swarm_delegate_planning = tool({
+export const hive_delegate_planning = tool({
   description:
-    "Delegate task decomposition to a swarm/planner subagent. Returns a prompt to spawn the planner. Use this to keep coordinator context lean - all planning reasoning happens in the subagent.",
+    "Delegate task decomposition to a hive/planner subagent. Returns a prompt to spawn the planner.",
   args: {
     task: tool.schema.string().min(1).describe("The task to decompose"),
     context: tool.schema
@@ -712,21 +551,14 @@ export const swarm_delegate_planning = tool({
       .optional()
       .default("auto")
       .describe("Decomposition strategy (default: auto-detect)"),
-    query_cass: tool.schema
-      .boolean()
-      .optional()
-      .default(true)
-      .describe("Query CASS for similar past tasks (default: true)"),
   },
   async execute(args) {
-    // Import needed modules
     const { selectStrategy, formatStrategyGuidelines } =
-      await import("./swarm-strategies");
+      await import("./hive-strategies");
     const { formatMemoryQueryForDecomposition } = await import("./learning");
     const { listSkills, getSkillsContextForSwarm, findRelevantSkills } =
       await import("./skills");
 
-    // Select strategy
     let selectedStrategy: Exclude<DecompositionStrategy, "auto">;
     let strategyReasoning: string;
 
@@ -739,42 +571,9 @@ export const swarm_delegate_planning = tool({
       strategyReasoning = selection.reasoning;
     }
 
-    // Query CASS for similar past tasks
-    let cassContext = "";
-    let cassResultInfo: {
-      queried: boolean;
-      results_found?: number;
-      included_in_context?: boolean;
-      reason?: string;
-    };
-
-    if (args.query_cass !== false) {
-      const cassResult = await queryCassHistory(args.task, 3);
-      if (cassResult.status === "success") {
-        cassContext = formatCassHistoryForPrompt(cassResult.data);
-        cassResultInfo = {
-          queried: true,
-          results_found: cassResult.data.results.length,
-          included_in_context: true,
-        };
-      } else {
-        cassResultInfo = {
-          queried: true,
-          results_found: 0,
-          included_in_context: false,
-          reason: cassResult.status,
-        };
-      }
-    } else {
-      cassResultInfo = { queried: false, reason: "disabled" };
-    }
-
-    // Fetch skills context
     let skillsContext = "";
     let skillsInfo: { included: boolean; count?: number; relevant?: string[] } =
-      {
-        included: false,
-      };
+      { included: false };
 
     const allSkills = await listSkills();
     if (allSkills.length > 0) {
@@ -786,32 +585,26 @@ export const swarm_delegate_planning = tool({
         relevant: relevantSkills,
       };
 
-      // Add suggestion for relevant skills
       if (relevantSkills.length > 0) {
         skillsContext += `\n\n**Suggested skills for this task**: ${relevantSkills.join(", ")}`;
       }
     }
 
-    // Format strategy guidelines
     const strategyGuidelines = formatStrategyGuidelines(selectedStrategy);
 
-    // Combine user context
     const contextSection = args.context
       ? `## Additional Context\n${args.context}`
       : "## Additional Context\n(none provided)";
 
-    // Build the planning prompt with clear instructions for JSON-only output
     const planningPrompt = STRATEGY_DECOMPOSITION_PROMPT.replace(
       "{task}",
       args.task,
     )
       .replace("{strategy_guidelines}", strategyGuidelines)
       .replace("{context_section}", contextSection)
-      .replace("{cass_history}", cassContext || "")
       .replace("{skills_context}", skillsContext || "")
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString());
 
-    // Add strict JSON-only instructions for the subagent
     const subagentInstructions = `
 ## CRITICAL: Output Format
 
@@ -853,11 +646,10 @@ Now generate the BeadTree for the given task.`;
 
     const fullPrompt = `${planningPrompt}\n\n${subagentInstructions}`;
 
-    // Return structured output for coordinator
     return JSON.stringify(
       {
         prompt: fullPrompt,
-        subagent_type: "swarm/planner",
+        subagent_type: "hive/planner",
         description: "Task decomposition planning",
         strategy: {
           selected: selectedStrategy,
@@ -867,12 +659,10 @@ Now generate the BeadTree for the given task.`;
         next_steps: [
           "1. Spawn subagent with Task tool using returned prompt",
           "2. Parse subagent response as JSON",
-          "3. Validate with swarm_validate_decomposition",
+          "3. Validate with hive_validate_decomposition",
           "4. Create beads with beads_create_epic",
         ],
-        cass_history: cassResultInfo,
         skills: skillsInfo,
-        // Add semantic-memory query instruction
         memory_query: formatMemoryQueryForDecomposition(args.task, 3),
       },
       null,
@@ -885,18 +675,18 @@ Now generate the BeadTree for the given task.`;
 // Errors
 // ============================================================================
 
-export class SwarmError extends Error {
+export class HiveError extends Error {
   constructor(
     message: string,
     public readonly operation: string,
     public readonly details?: unknown,
   ) {
     super(message);
-    this.name = "SwarmError";
+    this.name = "HiveError";
   }
 }
 
-export class DecompositionError extends SwarmError {
+export class DecompositionError extends HiveError {
   constructor(
     message: string,
     public readonly zodError?: z.ZodError,
@@ -906,7 +696,7 @@ export class DecompositionError extends SwarmError {
 }
 
 export const decomposeTools = {
-  swarm_decompose,
-  swarm_validate_decomposition,
-  swarm_delegate_planning,
+  hive_decompose,
+  hive_validate_decomposition,
+  hive_delegate_planning,
 };

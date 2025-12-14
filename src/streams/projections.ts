@@ -275,7 +275,7 @@ export async function checkConflicts(
     // Check each requested path against the reservation pattern
     for (const path of paths) {
       if (pathMatches(path, reservation.path_pattern)) {
-        console.warn("[SwarmMail] Conflict detected", {
+        console.warn("[HiveMail] Conflict detected", {
           path,
           holder: reservation.agent_name,
           pattern: reservation.path_pattern,
@@ -293,7 +293,7 @@ export async function checkConflicts(
   }
 
   if (conflicts.length > 0) {
-    console.warn("[SwarmMail] Total conflicts detected", {
+    console.warn("[HiveMail] Total conflicts detected", {
       count: conflicts.length,
       requestedBy: agentName,
       paths,

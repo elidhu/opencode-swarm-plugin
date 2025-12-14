@@ -42,11 +42,11 @@ const TIMESTAMP_SAFE_UNTIL = new Date("2286-01-01").getTime();
 function parseTimestamp(timestamp: string): number {
   const ts = parseInt(timestamp, 10);
   if (Number.isNaN(ts)) {
-    throw new Error(`[SwarmMail] Invalid timestamp: ${timestamp}`);
+    throw new Error(`[HiveMail] Invalid timestamp: ${timestamp}`);
   }
   if (ts > Number.MAX_SAFE_INTEGER) {
     console.warn(
-      `[SwarmMail] Timestamp ${timestamp} exceeds MAX_SAFE_INTEGER (year 2286+), precision may be lost`,
+      `[HiveMail] Timestamp ${timestamp} exceeds MAX_SAFE_INTEGER (year 2286+), precision may be lost`,
     );
   }
   return ts;
@@ -70,7 +70,7 @@ export async function appendEvent(
   // Extract common fields
   const { type, project_key, timestamp, ...rest } = event;
 
-  console.log("[SwarmMail] Appending event", {
+  console.log("[HiveMail] Appending event", {
     type,
     projectKey: project_key,
     timestamp,
@@ -90,7 +90,7 @@ export async function appendEvent(
   }
   const { id, sequence } = row;
 
-  console.log("[SwarmMail] Event appended", {
+  console.log("[HiveMail] Event appended", {
     type,
     id,
     sequence,
@@ -98,7 +98,7 @@ export async function appendEvent(
   });
 
   // Update materialized views based on event type
-  console.debug("[SwarmMail] Updating materialized views", { type, id });
+  console.debug("[HiveMail] Updating materialized views", { type, id });
   await updateMaterializedViews(db, { ...event, id, sequence });
 
   return { ...event, id, sequence };
@@ -145,7 +145,7 @@ export async function appendEvents(
         await db.exec("ROLLBACK");
       } catch (rbErr) {
         rollbackError = rbErr;
-        console.error("[SwarmMail] ROLLBACK failed:", rbErr);
+        console.error("[HiveMail] ROLLBACK failed:", rbErr);
       }
 
       if (rollbackError) {
@@ -449,7 +449,7 @@ export async function replayEventsBatched(
       await onBatch(events, { processed, total, percent });
 
       console.log(
-        `[SwarmMail] Replaying events: ${processed}/${total} (${percent}%)`,
+        `[HiveMail] Replaying events: ${processed}/${total} (${percent}%)`,
       );
 
       offset += batchSize;
@@ -533,7 +533,7 @@ async function updateMaterializedViews(
         break;
     }
   } catch (error) {
-    console.error("[SwarmMail] Failed to update materialized views", {
+    console.error("[HiveMail] Failed to update materialized views", {
       eventType: event.type,
       eventId: event.id,
       error,
@@ -569,7 +569,7 @@ async function handleMessageSent(
   db: Awaited<ReturnType<typeof getDatabase>>,
   event: MessageSentEvent & { id: number; sequence: number },
 ): Promise<void> {
-  console.log("[SwarmMail] Handling message sent event", {
+  console.log("[HiveMail] Handling message sent event", {
     from: event.from_agent,
     to: event.to_agents,
     subject: event.subject,
@@ -611,7 +611,7 @@ async function handleMessageSent(
       params,
     );
 
-    console.log("[SwarmMail] Message recipients inserted", {
+    console.log("[HiveMail] Message recipients inserted", {
       messageId,
       recipientCount: event.to_agents.length,
     });
@@ -622,7 +622,7 @@ async function handleFileReserved(
   db: Awaited<ReturnType<typeof getDatabase>>,
   event: FileReservedEvent & { id: number; sequence: number },
 ): Promise<void> {
-  console.log("[SwarmMail] Handling file reservation event", {
+  console.log("[HiveMail] Handling file reservation event", {
     agent: event.agent_name,
     paths: event.paths,
     exclusive: event.exclusive,
@@ -671,7 +671,7 @@ async function handleFileReserved(
       params,
     );
 
-    console.log("[SwarmMail] File reservations inserted", {
+    console.log("[HiveMail] File reservations inserted", {
       agent: event.agent_name,
       reservationCount: event.paths.length,
     });

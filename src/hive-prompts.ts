@@ -21,7 +21,7 @@ import { tool } from "@opencode-ai/plugin";
 /**
  * Prompt for decomposing a task into parallelizable subtasks.
  *
- * Used by swarm_decompose to instruct the agent on how to break down work.
+ * Used by hive_decompose to instruct the agent on how to break down work.
  * The agent responds with a BeadTree that gets validated.
  */
 export const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a swarm of agents.
@@ -188,7 +188,7 @@ You MUST keep your bead updated as you work:
 
 1. **Your bead is already in_progress** - don't change this unless blocked
 2. **If blocked**: \`bd update {bead_id} --status blocked\` and message coordinator
-3. **When done**: Use \`swarm_complete\` - it closes your bead automatically
+3. **When done**: Use \`hive_complete\` - it closes your bead automatically
 4. **Discovered issues**: Create new beads with \`bd create "issue" -t bug\`
 
 **Never work silently.** Your bead status is how the swarm tracks progress.
@@ -204,7 +204,7 @@ You MUST communicate with other agents:
 
 Use Swarm Mail for all communication:
 \`\`\`
-swarmmail_send(
+hivemail_send(
   to: ["coordinator" or specific agent],
   subject: "Brief subject",
   body: "Message content",
@@ -215,16 +215,16 @@ swarmmail_send(
 ## Coordination Protocol
 
 1. **Start**: Your bead is already marked in_progress
-2. **Progress**: Use swarm_progress to report status updates
+2. **Progress**: Use hive_progress to report status updates
 3. **Blocked**: Report immediately via Swarm Mail - don't spin
-4. **Complete**: Use swarm_complete when done - it handles:
+4. **Complete**: Use hive_complete when done - it handles:
    - Closing your bead with a summary
    - Releasing file reservations
    - Notifying the coordinator
 
 ## Self-Evaluation
 
-Before calling swarm_complete, evaluate your work:
+Before calling hive_complete, evaluate your work:
 - Type safety: Does it compile without errors?
 - No obvious bugs: Did you handle edge cases?
 - Follows patterns: Does it match existing code style?
@@ -279,23 +279,23 @@ Only modify these files. Need others? Message the coordinator.
 
 ### Initialize FIRST (before any work)
 \`\`\`
-swarmmail_init(project_path="$PWD", task_description="{subtask_title}")
+hivemail_init(project_path="$PWD", task_description="{subtask_title}")
 \`\`\`
 
 ### Reserve Files (if not already reserved by coordinator)
 \`\`\`
-swarmmail_reserve(paths=[...files...], reason="{bead_id}: {subtask_title}")
+hivemail_reserve(paths=[...files...], reason="{bead_id}: {subtask_title}")
 \`\`\`
 
 ### Check Inbox Regularly
 \`\`\`
-swarmmail_inbox()  # Check for coordinator messages
-swarmmail_read_message(message_id=N)  # Read specific message
+hivemail_inbox()  # Check for coordinator messages
+hivemail_read_message(message_id=N)  # Read specific message
 \`\`\`
 
 ### Report Progress (REQUIRED - don't work silently)
 \`\`\`
-swarmmail_send(
+hivemail_send(
   to=["coordinator"],
   subject="Progress: {bead_id}",
   body="<what you did, blockers, questions>",
@@ -305,7 +305,7 @@ swarmmail_send(
 
 ### When Blocked
 \`\`\`
-swarmmail_send(
+hivemail_send(
   to=["coordinator"],
   subject="BLOCKED: {bead_id}",
   body="<blocker description, what you need>",
@@ -317,7 +317,7 @@ beads_update(id="{bead_id}", status="blocked")
 
 ### Release Files When Done
 \`\`\`
-swarmmail_release()  # Or let swarm_complete handle it
+hivemail_release()  # Or let hive_complete handle it
 \`\`\`
 
 ## [OTHER TOOLS]
@@ -330,7 +330,7 @@ swarmmail_release()  # Or let swarm_complete handle it
 - skills_use(name) - Activate skill for specialized guidance
 
 ### Completion (REQUIRED)
-- swarm_complete(project_key, agent_name, bead_id, summary, files_touched)
+- hive_complete(project_key, agent_name, bead_id, summary, files_touched)
 
 ## [LEARNING]
 As you work, note reusable patterns, best practices, or domain insights:
@@ -340,14 +340,14 @@ As you work, note reusable patterns, best practices, or domain insights:
 - Skills make swarms smarter over time
 
 ## [WORKFLOW]
-1. **swarmmail_init** - Initialize session FIRST
+1. **hivemail_init** - Initialize session FIRST
 2. Read assigned files
 3. Implement changes
-4. **swarmmail_send** - Report progress to coordinator
+4. **hivemail_send** - Report progress to coordinator
 5. Verify (typecheck)
-6. **swarm_complete** - Mark done, release reservations
+6. **hive_complete** - Mark done, release reservations
 
-**CRITICAL: Never work silently. Send progress updates via swarmmail_send every significant milestone.**
+**CRITICAL: Never work silently. Send progress updates via hivemail_send every significant milestone.**
 
 Begin now.`;
 
@@ -479,7 +479,7 @@ export function formatEvaluationPrompt(params: {
 /**
  * Generate subtask prompt for a spawned agent
  */
-export const swarm_subtask_prompt = tool({
+export const hive_subtask_prompt = tool({
   description: "Generate the prompt for a spawned subtask agent",
   args: {
     agent_name: tool.schema.string().describe("Agent Mail name for the agent"),
@@ -519,7 +519,7 @@ export const swarm_subtask_prompt = tool({
  * Generates a streamlined prompt that tells agents to USE Agent Mail and beads.
  * Returns JSON that can be directly used with Task tool.
  */
-export const swarm_spawn_subtask = tool({
+export const hive_spawn_subtask = tool({
   description:
     "Prepare a subtask for spawning. Returns prompt with Agent Mail/beads instructions.",
   args: {
@@ -564,7 +564,7 @@ export const swarm_spawn_subtask = tool({
 /**
  * Generate self-evaluation prompt
  */
-export const swarm_evaluation_prompt = tool({
+export const hive_evaluation_prompt = tool({
   description: "Generate self-evaluation prompt for a completed subtask",
   args: {
     bead_id: tool.schema.string().describe("Subtask bead ID"),
@@ -605,10 +605,10 @@ export const swarm_evaluation_prompt = tool({
 /**
  * Generate a strategy-specific planning prompt
  *
- * Higher-level than swarm_decompose - includes strategy selection and guidelines.
+ * Higher-level than hive_decompose - includes strategy selection and guidelines.
  * Use this when you want the full planning experience with strategy-specific advice.
  */
-export const swarm_plan_prompt = tool({
+export const hive_plan_prompt = tool({
   description:
     "Generate strategy-specific decomposition prompt. Auto-selects strategy or uses provided one. Queries CASS for similar tasks.",
   args: {
@@ -647,7 +647,7 @@ export const swarm_plan_prompt = tool({
   async execute(args) {
     // Import needed modules dynamically
     const { selectStrategy, formatStrategyGuidelines, STRATEGIES } =
-      await import("./swarm-strategies");
+      await import("./hive-strategies");
     const { formatMemoryQueryForDecomposition } = await import("./learning");
     const { listSkills, getSkillsContextForSwarm, findRelevantSkills } =
       await import("./skills");
@@ -737,7 +737,7 @@ export const swarm_plan_prompt = tool({
           ],
         },
         validation_note:
-          "Parse agent response as JSON and validate with swarm_validate_decomposition",
+          "Parse agent response as JSON and validate with hive_validate_decomposition",
         skills: skillsInfo,
         // Add semantic-memory query instruction
         memory_query: formatMemoryQueryForDecomposition(args.task, 3),
@@ -749,8 +749,8 @@ export const swarm_plan_prompt = tool({
 });
 
 export const promptTools = {
-  swarm_subtask_prompt,
-  swarm_spawn_subtask,
-  swarm_evaluation_prompt,
-  swarm_plan_prompt,
+  hive_subtask_prompt,
+  hive_spawn_subtask,
+  hive_evaluation_prompt,
+  hive_plan_prompt,
 };

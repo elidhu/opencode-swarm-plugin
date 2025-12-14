@@ -56,11 +56,11 @@ import {
 
 // Swarm tools
 import {
-  swarm_decompose,
-  swarm_validate_decomposition,
-  swarm_record_outcome,
+  hive_decompose,
+  hive_validate_decomposition,
+  hive_record_outcome,
   detectInstructionConflicts,
-} from "./swarm";
+} from "./hive";
 
 // ============================================================================
 // Test Helpers
@@ -781,9 +781,9 @@ describe("Pattern Maturity", () => {
 // ============================================================================
 
 describe("Swarm Tool Integrations", () => {
-  describe("swarm_record_outcome", () => {
+  describe("hive_record_outcome", () => {
     it("records successful outcome and generates feedback", async () => {
-      const result = await swarm_record_outcome.execute(
+      const result = await hive_record_outcome.execute(
         {
           bead_id: "test-bead-123",
           duration_ms: 60000,
@@ -804,7 +804,7 @@ describe("Swarm Tool Integrations", () => {
     });
 
     it("records failed outcome as harmful", async () => {
-      const result = await swarm_record_outcome.execute(
+      const result = await hive_record_outcome.execute(
         {
           bead_id: "test-bead-456",
           duration_ms: 3600000, // 1 hour
@@ -821,7 +821,7 @@ describe("Swarm Tool Integrations", () => {
     });
 
     it("uses custom criteria when provided", async () => {
-      const result = await swarm_record_outcome.execute(
+      const result = await hive_record_outcome.execute(
         {
           bead_id: "test-bead-789",
           duration_ms: 60000,
@@ -874,7 +874,7 @@ describe("Swarm Tool Integrations", () => {
     });
   });
 
-  describe("swarm_validate_decomposition with conflicts", () => {
+  describe("hive_validate_decomposition with conflicts", () => {
     it("includes instruction conflicts as warnings", async () => {
       const decomposition = {
         epic: { title: "Test Epic" },
@@ -896,7 +896,7 @@ describe("Swarm Tool Integrations", () => {
         ],
       };
 
-      const result = await swarm_validate_decomposition.execute(
+      const result = await hive_validate_decomposition.execute(
         { response: JSON.stringify(decomposition) },
         mockContext,
       );
@@ -911,9 +911,9 @@ describe("Swarm Tool Integrations", () => {
     });
   });
 
-  describe("swarm_decompose with CASS integration", () => {
+  describe("hive_decompose with CASS integration", () => {
     it("includes cass_history in response", async () => {
-      const result = await swarm_decompose.execute(
+      const result = await hive_decompose.execute(
         {
           task: "Add user authentication",
           max_subtasks: 3,
@@ -929,7 +929,7 @@ describe("Swarm Tool Integrations", () => {
     });
 
     it("skips CASS when disabled", async () => {
-      const result = await swarm_decompose.execute(
+      const result = await hive_decompose.execute(
         {
           task: "Add user authentication",
           max_subtasks: 3,

@@ -133,6 +133,6 @@ The coordinator auto-selects strategy by matching task keywords. Override with e
 - Past experience suggests a different approach
 
 ```
-swarm_plan_prompt(task="...", strategy="risk-based")  // explicit override
-swarm_plan_prompt(task="...")                          // auto-select
+hive_plan_prompt(task="...", strategy="risk-based")  // explicit override
+hive_plan_prompt(task="...")                          // auto-select
 ```

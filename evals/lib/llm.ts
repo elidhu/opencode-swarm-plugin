@@ -38,7 +38,7 @@ export async function generateDecomposition(
 /**
  * Format a decomposition prompt from task and context
  *
- * Uses the same prompt template as swarm_plan_prompt
+ * Uses the same prompt template as hive_plan_prompt
  */
 export function formatDecompositionPrompt(
   task: string,

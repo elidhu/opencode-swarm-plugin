@@ -361,9 +361,9 @@ ${examples}`;
  * Select the best decomposition strategy for a task
  *
  * Analyzes task description and recommends a strategy with reasoning.
- * Use this before swarm_plan_prompt to understand the recommended approach.
+ * Use this before hive_plan_prompt to understand the recommended approach.
  */
-export const swarm_select_strategy = tool({
+export const hive_select_strategy = tool({
   description:
     "Analyze task and recommend decomposition strategy (file-based, feature-based, or risk-based)",
   args: {
@@ -403,5 +403,5 @@ export const swarm_select_strategy = tool({
 });
 
 export const strategyTools = {
-  swarm_select_strategy,
+  hive_select_strategy,
 };

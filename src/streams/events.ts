@@ -183,7 +183,7 @@ export type TaskBlockedEvent = z.infer<typeof TaskBlockedEventSchema>;
  *
  * Common fields for tracking agent coordination session across both
  * the MCP-based implementation (agent-mail) and the embedded event-sourced
- * implementation (swarm-mail).
+ * implementation (hive-mail).
  */
 export interface MailSessionState {
   /** Project key (usually absolute path) */

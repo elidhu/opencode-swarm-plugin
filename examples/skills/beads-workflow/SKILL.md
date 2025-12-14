@@ -14,14 +14,14 @@ tools:
   - beads_create_epic
   - beads_sync
 related_skills:
-  - swarm-coordination
+  - hive-coordination
 ---
 
 # Beads Workflow Skill
 
 Beads is a local-first issue tracking system designed for AI agents. This skill provides best practices for effective bead management.
 
-**NOTE:** For swarm workflows, combine this skill with `swarm-coordination` from global-skills/.
+**NOTE:** For swarm workflows, combine this skill with `hive-coordination` from global-skills/.
 
 ## Bead Types
 
@@ -193,7 +193,7 @@ Beads sync with git:
 When working in a swarm:
 
 ```text
-1. Load `swarm-coordination` skill with `skills_use(name="swarm-coordination")`
+1. Load `hive-coordination` skill with `skills_use(name="hive-coordination")`
 2. Create epic with `beads_create_epic()` (atomic operation)
 3. Coordinator assigns beads to worker agents
 4. Workers load relevant skills based on subtask type
@@ -208,5 +208,5 @@ When working in a swarm:
 - `type: "bug"` → Load `testing-patterns` for regression tests
 - `type: "feature"` → Load `system-design` for architecture
 - `type: "chore"` → Load `testing-patterns` if refactoring
-- `type: "epic"` → Load `swarm-coordination` for decomposition
+- `type: "epic"` → Load `hive-coordination` for decomposition
 ```

@@ -1,0 +1,35 @@
+/**
+ * Swarm Module - High-level swarm coordination
+ *
+ * This module re-exports from focused submodules for backward compatibility.
+ * For new code, prefer importing from specific modules:
+ * - hive-strategies.ts - Strategy selection
+ * - hive-decompose.ts - Task decomposition
+ * - hive-prompts.ts - Prompt templates
+ * - hive-orchestrate.ts - Status and completion
+ *
+ * @module swarm
+ */
+
+// Re-export everything for backward compatibility
+export * from "./hive-strategies";
+export * from "./hive-decompose";
+export * from "./hive-prompts";
+export * from "./hive-orchestrate";
+
+// Import tools from each module
+import { strategyTools } from "./hive-strategies";
+import { decomposeTools } from "./hive-decompose";
+import { promptTools } from "./hive-prompts";
+import { orchestrateTools } from "./hive-orchestrate";
+
+/**
+ * Combined swarm tools for plugin registration.
+ * Includes all tools from strategy, decompose, prompt, and orchestrate modules.
+ */
+export const hiveTools = {
+  ...strategyTools,
+  ...decomposeTools,
+  ...promptTools,
+  ...orchestrateTools,
+};

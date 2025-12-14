@@ -1,19 +1,19 @@
 ---
-name: swarm-coordination
+name: hive-coordination
 description: Multi-agent coordination patterns for OpenCode swarm workflows. Use when working on complex tasks that benefit from parallelization, when coordinating multiple agents, or when managing task decomposition. Do NOT use for simple single-agent tasks.
 tags:
   - swarm
   - multi-agent
   - coordination
 tools:
-  - swarm_decompose
-  - swarm_complete
-  - swarmmail_init
-  - swarmmail_send
-  - swarmmail_inbox
-  - swarmmail_read_message
-  - swarmmail_reserve
-  - swarmmail_release
+  - hive_decompose
+  - hive_complete
+  - hivemail_init
+  - hivemail_send
+  - hivemail_inbox
+  - hivemail_read_message
+  - hivemail_reserve
+  - hivemail_release
   - skills_use
   - skills_list
 related_skills:
@@ -30,7 +30,7 @@ This skill provides guidance for effective multi-agent coordination in OpenCode 
 
 ## MANDATORY: Swarm Mail
 
-**ALL coordination MUST use `swarmmail_*` tools.** This is non-negotiable.
+**ALL coordination MUST use `hivemail_*` tools.** This is non-negotiable.
 
 Swarm Mail is embedded (no external server needed) and provides:
 
@@ -104,21 +104,21 @@ Parent Task: "Add feature X"
 
 When multiple agents work on the same codebase:
 
-1. **Initialize Swarm Mail first** - Use `swarmmail_init` before any work
-2. **Reserve files before editing** - Use `swarmmail_reserve` to claim files
+1. **Initialize Swarm Mail first** - Use `hivemail_init` before any work
+2. **Reserve files before editing** - Use `hivemail_reserve` to claim files
 3. **Respect reservations** - Don't edit files reserved by other agents
-4. **Release when done** - Use `swarmmail_release` or let `swarm_complete` handle it
+4. **Release when done** - Use `hivemail_release` or let `hive_complete` handle it
 5. **Coordinate on shared files** - If you must edit a reserved file, send a message to the owning agent
 
 ```typescript
 // Initialize first
-await swarmmail_init({
+await hivemail_init({
   project_path: "$PWD",
   task_description: "Working on auth feature",
 });
 
 // Reserve files
-await swarmmail_reserve({
+await hivemail_reserve({
   paths: ["src/auth/**"],
   reason: "bd-123: Auth implementation",
   ttl_seconds: 3600,
@@ -127,7 +127,7 @@ await swarmmail_reserve({
 // Work...
 
 // Release when done
-await swarmmail_release();
+await hivemail_release();
 ```
 
 ## Communication Patterns
@@ -135,7 +135,7 @@ await swarmmail_release();
 ### Broadcasting Updates
 
 ```typescript
-swarmmail_send({
+hivemail_send({
   to: ["*"],
   subject: "API Complete",
   body: "Completed API endpoints, ready for frontend integration",
@@ -146,7 +146,7 @@ swarmmail_send({
 ### Direct Coordination
 
 ```typescript
-swarmmail_send({
+hivemail_send({
   to: ["frontend-agent"],
   subject: "Auth API Spec",
   body: "Auth API is at /api/auth/*, here's the spec...",
@@ -158,16 +158,16 @@ swarmmail_send({
 
 ```typescript
 // Check inbox (max 5, no bodies for context safety)
-const inbox = await swarmmail_inbox();
+const inbox = await hivemail_inbox();
 
 // Read specific message body
-const message = await swarmmail_read_message({ message_id: N });
+const message = await hivemail_read_message({ message_id: N });
 ```
 
 ### Reporting Blockers
 
 ```typescript
-swarmmail_send({
+hivemail_send({
   to: ["coordinator"],
   subject: "BLOCKED: Need DB schema",
   body: "Can't proceed without users table",
@@ -178,7 +178,7 @@ swarmmail_send({
 
 ## Best Practices
 
-1. **Initialize Swarm Mail first** - Always call `swarmmail_init` before any work
+1. **Initialize Swarm Mail first** - Always call `hivemail_init` before any work
 2. **Small, focused subtasks** - Each subtask should be completable in one agent session
 3. **Clear boundaries** - Define exactly what files/modules each subtask touches
 4. **Explicit handoffs** - When one task enables another, communicate clearly
@@ -188,7 +188,7 @@ swarmmail_send({
    - Testing work → `skills_use(name="testing-patterns")`
    - Architecture decisions → `skills_use(name="system-design")`
    - CLI development → `skills_use(name="cli-builder")`
-   - Multi-agent coordination → `skills_use(name="swarm-coordination")`
+   - Multi-agent coordination → `skills_use(name="hive-coordination")`
 
 ## Common Patterns
 
@@ -197,7 +197,7 @@ swarmmail_send({
 ```yaml
 decomposition:
   strategy: hybrid
-  skills: [system-design, swarm-coordination]
+  skills: [system-design, hive-coordination]
   phases:
     - name: design
       parallel: true
@@ -245,20 +245,20 @@ decomposition:
 
 **For Coordinators:**
 
-1. Initialize Swarm Mail with `swarmmail_init`
-2. Load `swarm-coordination` skill
+1. Initialize Swarm Mail with `hivemail_init`
+2. Load `hive-coordination` skill
 3. Analyze task type
 4. Load additional skills based on domain (testing, design, CLI)
 5. Include skill recommendations in `shared_context` for workers
 
 **For Workers:**
 
-1. Initialize Swarm Mail with `swarmmail_init`
+1. Initialize Swarm Mail with `hivemail_init`
 2. Read `shared_context` from coordinator
 3. Load recommended skills with `skills_use(name="skill-name")`
 4. Apply skill knowledge to subtask
-5. Report progress via `swarmmail_send`
-6. Complete with `swarm_complete`
+5. Report progress via `hivemail_send`
+6. Complete with `hive_complete`
 
 **Example shared_context:**
 
@@ -282,11 +282,11 @@ Project learnings: [semantic-memory results]
 
 | Tool                     | Purpose                             |
 | ------------------------ | ----------------------------------- |
-| `swarmmail_init`         | Initialize session (REQUIRED FIRST) |
-| `swarmmail_send`         | Send message to agents              |
-| `swarmmail_inbox`        | Check inbox (max 5, no bodies)      |
-| `swarmmail_read_message` | Read specific message body          |
-| `swarmmail_reserve`      | Reserve files for exclusive editing |
-| `swarmmail_release`      | Release file reservations           |
-| `swarmmail_ack`          | Acknowledge message                 |
-| `swarmmail_health`       | Check database health               |
+| `hivemail_init`         | Initialize session (REQUIRED FIRST) |
+| `hivemail_send`         | Send message to agents              |
+| `hivemail_inbox`        | Check inbox (max 5, no bodies)      |
+| `hivemail_read_message` | Read specific message body          |
+| `hivemail_reserve`      | Reserve files for exclusive editing |
+| `hivemail_release`      | Release file reservations           |
+| `hivemail_ack`          | Acknowledge message                 |
+| `hivemail_health`       | Check database health               |

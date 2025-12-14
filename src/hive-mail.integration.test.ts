@@ -1,5 +1,5 @@
 /**
- * Integration tests for swarm-mail.ts (embedded implementation)
+ * Integration tests for hive-mail.ts (embedded implementation)
  *
  * These tests run against the embedded PGLite database.
  * No external server required - everything runs in-process.
@@ -11,23 +11,23 @@ import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetDatabase, closeDatabase, getDatabase } from "./streams/index";
 import {
-  swarmmail_init,
-  swarmmail_send,
-  swarmmail_inbox,
-  swarmmail_read_message,
-  swarmmail_reserve,
-  swarmmail_release,
-  swarmmail_ack,
-  swarmmail_health,
+  hivemail_init,
+  hivemail_send,
+  hivemail_inbox,
+  hivemail_read_message,
+  hivemail_reserve,
+  hivemail_release,
+  hivemail_ack,
+  hivemail_health,
   clearSessionState,
-} from "./swarm-mail";
+} from "./hive-mail";
 
 // ============================================================================
 // Test Configuration
 // ============================================================================
 
 /** Generate unique test database path per test run */
-function testDbPath(prefix = "swarm-mail"): string {
+function testDbPath(prefix = "hive-mail"): string {
   return `/tmp/${prefix}-${randomUUID()}`;
 }
 
@@ -108,8 +108,8 @@ afterEach(async () => {
 // Health Check Tests
 // ============================================================================
 
-describe("swarm-mail integration (embedded)", () => {
-  describe("swarmmail_health", () => {
+describe("hive-mail integration (embedded)", () => {
+  describe("hivemail_health", () => {
     it("returns healthy when database is initialized", async () => {
       const ctx = createTestContext();
 
@@ -117,7 +117,7 @@ describe("swarm-mail integration (embedded)", () => {
         healthy: boolean;
         database: string;
         stats: { events: number; agents: number; messages: number };
-      }>(swarmmail_health, {}, ctx);
+      }>(hivemail_health, {}, ctx);
 
       expect(result.healthy).toBe(true);
       expect(result.database).toBeTruthy();
@@ -129,7 +129,7 @@ describe("swarm-mail integration (embedded)", () => {
 
       // Initialize session
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "HealthAgent" },
         ctx,
       );
@@ -141,7 +141,7 @@ describe("swarm-mail integration (embedded)", () => {
           project_key: string;
           reservations: number;
         };
-      }>(swarmmail_health, {}, ctx);
+      }>(hivemail_health, {}, ctx);
 
       expect(result.healthy).toBe(true);
       expect(result.session).toBeDefined();
@@ -156,7 +156,7 @@ describe("swarm-mail integration (embedded)", () => {
   // Initialization Tests
   // ============================================================================
 
-  describe("swarmmail_init", () => {
+  describe("hivemail_init", () => {
     it("creates agent and returns name and project_key", async () => {
       const ctx = createTestContext();
 
@@ -164,7 +164,7 @@ describe("swarm-mail integration (embedded)", () => {
         agent_name: string;
         project_key: string;
         message: string;
-      }>(swarmmail_init, { project_path: TEST_DB_PATH }, ctx);
+      }>(hivemail_init, { project_path: TEST_DB_PATH }, ctx);
 
       expect(result.agent_name).toBeTruthy();
       expect(result.project_key).toBe(TEST_DB_PATH);
@@ -178,13 +178,13 @@ describe("swarm-mail integration (embedded)", () => {
       const ctx2 = createTestContext();
 
       const result1 = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH },
         ctx1,
       );
 
       const result2 = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH },
         ctx2,
       );
@@ -203,7 +203,7 @@ describe("swarm-mail integration (embedded)", () => {
       const customName = "BlueLake";
 
       const result = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: customName },
         ctx,
       );
@@ -219,12 +219,12 @@ describe("swarm-mail integration (embedded)", () => {
       const result1 = await executeTool<{
         agent_name: string;
         already_initialized?: boolean;
-      }>(swarmmail_init, { project_path: TEST_DB_PATH }, ctx);
+      }>(hivemail_init, { project_path: TEST_DB_PATH }, ctx);
 
       const result2 = await executeTool<{
         agent_name: string;
         already_initialized?: boolean;
-      }>(swarmmail_init, { project_path: TEST_DB_PATH }, ctx);
+      }>(hivemail_init, { project_path: TEST_DB_PATH }, ctx);
 
       expect(result1.agent_name).toBe(result2.agent_name);
       expect(result2.already_initialized).toBe(true);
@@ -237,20 +237,20 @@ describe("swarm-mail integration (embedded)", () => {
   // Messaging Tests
   // ============================================================================
 
-  describe("swarmmail_send", () => {
+  describe("hivemail_send", () => {
     it("sends message to another agent", async () => {
       const senderCtx = createTestContext();
       const recipientCtx = createTestContext();
 
       // Initialize both agents
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "Sender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "Recipient" },
         recipientCtx,
       );
@@ -262,7 +262,7 @@ describe("swarm-mail integration (embedded)", () => {
         thread_id?: string;
         recipient_count: number;
       }>(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Test message",
@@ -287,13 +287,13 @@ describe("swarm-mail integration (embedded)", () => {
       const recipientCtx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "UrgentSender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "UrgentRecipient" },
         recipientCtx,
       );
@@ -302,7 +302,7 @@ describe("swarm-mail integration (embedded)", () => {
         success: boolean;
         message_id: number;
       }>(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Urgent: Action required",
@@ -324,7 +324,7 @@ describe("swarm-mail integration (embedded)", () => {
       const ctx = createTestContext();
 
       const result = await executeTool<{ error?: string }>(
-        swarmmail_send,
+        hivemail_send,
         {
           to: ["SomeAgent"],
           subject: "Test",
@@ -343,26 +343,26 @@ describe("swarm-mail integration (embedded)", () => {
   // Inbox Tests
   // ============================================================================
 
-  describe("swarmmail_inbox", () => {
+  describe("hivemail_inbox", () => {
     it("fetches messages without bodies by default (context-safe)", async () => {
       const senderCtx = createTestContext();
       const recipientCtx = createTestContext();
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "InboxSender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "InboxRecipient" },
         recipientCtx,
       );
 
       // Send a message
       await executeTool(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Inbox test message",
@@ -381,7 +381,7 @@ describe("swarm-mail integration (embedded)", () => {
         }>;
         total: number;
         note: string;
-      }>(swarmmail_inbox, {}, recipientCtx);
+      }>(hivemail_inbox, {}, recipientCtx);
 
       expect(result.messages.length).toBeGreaterThan(0);
       const testMsg = result.messages.find(
@@ -391,7 +391,7 @@ describe("swarm-mail integration (embedded)", () => {
       expect(testMsg?.from).toBe("InboxSender");
       // Body should NOT be included
       expect(testMsg?.body).toBeUndefined();
-      expect(result.note).toContain("swarmmail_read_message");
+      expect(result.note).toContain("hivemail_read_message");
 
       clearSessionState(senderCtx.sessionID);
       clearSessionState(recipientCtx.sessionID);
@@ -402,13 +402,13 @@ describe("swarm-mail integration (embedded)", () => {
       const recipientCtx = createTestContext();
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "LimitSender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "LimitRecipient" },
         recipientCtx,
       );
@@ -416,7 +416,7 @@ describe("swarm-mail integration (embedded)", () => {
       // Send 8 messages (more than limit)
       for (let i = 0; i < 8; i++) {
         await executeTool(
-          swarmmail_send,
+          hivemail_send,
           {
             to: [recipient.agent_name],
             subject: `Limit test message ${i}`,
@@ -429,7 +429,7 @@ describe("swarm-mail integration (embedded)", () => {
       // Request 10 messages (should be capped at 5)
       const result = await executeTool<{
         messages: Array<{ id: number }>;
-      }>(swarmmail_inbox, { limit: 10 }, recipientCtx);
+      }>(hivemail_inbox, { limit: 10 }, recipientCtx);
 
       // Should be capped at 5
       expect(result.messages.length).toBeLessThanOrEqual(5);
@@ -443,20 +443,20 @@ describe("swarm-mail integration (embedded)", () => {
       const recipientCtx = createTestContext();
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "UrgentFilterSender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "UrgentFilterRecipient" },
         recipientCtx,
       );
 
       // Send normal and urgent messages
       await executeTool(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Normal message",
@@ -467,7 +467,7 @@ describe("swarm-mail integration (embedded)", () => {
       );
 
       await executeTool(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Urgent message",
@@ -480,7 +480,7 @@ describe("swarm-mail integration (embedded)", () => {
       // Fetch only urgent messages
       const result = await executeTool<{
         messages: Array<{ subject: string; importance: string }>;
-      }>(swarmmail_inbox, { urgent_only: true }, recipientCtx);
+      }>(hivemail_inbox, { urgent_only: true }, recipientCtx);
 
       // All returned messages should be urgent
       for (const msg of result.messages) {
@@ -499,26 +499,26 @@ describe("swarm-mail integration (embedded)", () => {
   // Read Message Tests
   // ============================================================================
 
-  describe("swarmmail_read_message", () => {
+  describe("hivemail_read_message", () => {
     it("returns full message body when reading by ID", async () => {
       const senderCtx = createTestContext();
       const recipientCtx = createTestContext();
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "ReadSender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "ReadRecipient" },
         recipientCtx,
       );
 
       // Send a message
       const sent = await executeTool<{ message_id: number }>(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Read test message",
@@ -533,7 +533,7 @@ describe("swarm-mail integration (embedded)", () => {
         from: string;
         subject: string;
         body: string;
-      }>(swarmmail_read_message, { message_id: sent.message_id }, recipientCtx);
+      }>(hivemail_read_message, { message_id: sent.message_id }, recipientCtx);
 
       expect(result.id).toBe(sent.message_id);
       expect(result.from).toBe("ReadSender");
@@ -548,13 +548,13 @@ describe("swarm-mail integration (embedded)", () => {
       const ctx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "NotFoundAgent" },
         ctx,
       );
 
       const result = await executeTool<{ error?: string }>(
-        swarmmail_read_message,
+        hivemail_read_message,
         { message_id: 99999 },
         ctx,
       );
@@ -569,12 +569,12 @@ describe("swarm-mail integration (embedded)", () => {
   // File Reservation Tests
   // ============================================================================
 
-  describe("swarmmail_reserve", () => {
+  describe("hivemail_reserve", () => {
     it("grants file reservations", async () => {
       const ctx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "ReserveAgent" },
         ctx,
       );
@@ -587,7 +587,7 @@ describe("swarm-mail integration (embedded)", () => {
         }>;
         conflicts?: Array<{ path: string; holders: string[] }>;
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: ["src/auth/**", "src/config.ts"],
           reason: "bd-test-123: Working on auth",
@@ -609,13 +609,13 @@ describe("swarm-mail integration (embedded)", () => {
       const agent2Ctx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "ConflictAgent1" },
         agent1Ctx,
       );
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "ConflictAgent2" },
         agent2Ctx,
       );
@@ -626,7 +626,7 @@ describe("swarm-mail integration (embedded)", () => {
       const result1 = await executeTool<{
         granted: Array<{ id: number }>;
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: [conflictPath],
           exclusive: true,
@@ -642,7 +642,7 @@ describe("swarm-mail integration (embedded)", () => {
         conflicts?: Array<{ path: string; holders: string[] }>;
         warning?: string;
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: [conflictPath],
           exclusive: true,
@@ -664,7 +664,7 @@ describe("swarm-mail integration (embedded)", () => {
       const ctx = createTestContext();
 
       const result = await executeTool<{ error?: string }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: ["src/test.ts"],
         },
@@ -681,19 +681,19 @@ describe("swarm-mail integration (embedded)", () => {
   // Release Reservation Tests
   // ============================================================================
 
-  describe("swarmmail_release", () => {
+  describe("hivemail_release", () => {
     it("releases all reservations for an agent", async () => {
       const ctx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "ReleaseAgent" },
         ctx,
       );
 
       // Create reservations
       await executeTool(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: ["src/release-test-1.ts", "src/release-test-2.ts"],
           exclusive: true,
@@ -705,7 +705,7 @@ describe("swarm-mail integration (embedded)", () => {
       const result = await executeTool<{
         released: number;
         released_at: string;
-      }>(swarmmail_release, {}, ctx);
+      }>(hivemail_release, {}, ctx);
 
       expect(result.released).toBe(2);
       expect(result.released_at).toBeTruthy();
@@ -717,7 +717,7 @@ describe("swarm-mail integration (embedded)", () => {
       const ctx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "SpecificReleaseAgent" },
         ctx,
       );
@@ -727,7 +727,7 @@ describe("swarm-mail integration (embedded)", () => {
 
       // Create reservations
       await executeTool(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: [path1, path2],
           exclusive: true,
@@ -737,7 +737,7 @@ describe("swarm-mail integration (embedded)", () => {
 
       // Release only one path
       const result = await executeTool<{ released: number }>(
-        swarmmail_release,
+        hivemail_release,
         { paths: [path1] },
         ctx,
       );
@@ -751,7 +751,7 @@ describe("swarm-mail integration (embedded)", () => {
       const ctx = createTestContext();
 
       await executeTool(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "IdReleaseAgent" },
         ctx,
       );
@@ -760,7 +760,7 @@ describe("swarm-mail integration (embedded)", () => {
       const reserve = await executeTool<{
         granted: Array<{ id: number }>;
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: ["src/id-release-1.ts", "src/id-release-2.ts"],
           exclusive: true,
@@ -772,7 +772,7 @@ describe("swarm-mail integration (embedded)", () => {
 
       // Release by ID
       const result = await executeTool<{ released: number }>(
-        swarmmail_release,
+        hivemail_release,
         { reservation_ids: [firstId] },
         ctx,
       );
@@ -787,26 +787,26 @@ describe("swarm-mail integration (embedded)", () => {
   // Acknowledge Message Tests
   // ============================================================================
 
-  describe("swarmmail_ack", () => {
+  describe("hivemail_ack", () => {
     it("acknowledges a message requiring acknowledgement", async () => {
       const senderCtx = createTestContext();
       const recipientCtx = createTestContext();
 
       const sender = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "AckSender" },
         senderCtx,
       );
 
       const recipient = await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "AckRecipient" },
         recipientCtx,
       );
 
       // Send message requiring ack
       const sent = await executeTool<{ message_id: number }>(
-        swarmmail_send,
+        hivemail_send,
         {
           to: [recipient.agent_name],
           subject: "Please acknowledge",
@@ -820,7 +820,7 @@ describe("swarm-mail integration (embedded)", () => {
       const result = await executeTool<{
         acknowledged: boolean;
         acknowledged_at: string;
-      }>(swarmmail_ack, { message_id: sent.message_id }, recipientCtx);
+      }>(hivemail_ack, { message_id: sent.message_id }, recipientCtx);
 
       expect(result.acknowledged).toBe(true);
       expect(result.acknowledged_at).toBeTruthy();
@@ -841,26 +841,26 @@ describe("swarm-mail integration (embedded)", () => {
       const worker2Ctx = createTestContext();
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "Coordinator" },
         coordCtx,
       );
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "Worker1" },
         worker1Ctx,
       );
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "Worker2" },
         worker2Ctx,
       );
 
       // Coordinator broadcasts to workers
       await executeTool(
-        swarmmail_send,
+        hivemail_send,
         {
           to: ["Worker1", "Worker2"],
           subject: "Task assignment",
@@ -874,11 +874,11 @@ describe("swarm-mail integration (embedded)", () => {
       // Verify both workers received the message
       const worker1Inbox = await executeTool<{
         messages: Array<{ subject: string }>;
-      }>(swarmmail_inbox, {}, worker1Ctx);
+      }>(hivemail_inbox, {}, worker1Ctx);
 
       const worker2Inbox = await executeTool<{
         messages: Array<{ subject: string }>;
-      }>(swarmmail_inbox, {}, worker2Ctx);
+      }>(hivemail_inbox, {}, worker2Ctx);
 
       expect(
         worker1Inbox.messages.some((m) => m.subject === "Task assignment"),
@@ -897,13 +897,13 @@ describe("swarm-mail integration (embedded)", () => {
       const worker2Ctx = createTestContext();
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "SwarmWorker1" },
         worker1Ctx,
       );
 
       await executeTool<{ agent_name: string }>(
-        swarmmail_init,
+        hivemail_init,
         { project_path: TEST_DB_PATH, agent_name: "SwarmWorker2" },
         worker2Ctx,
       );
@@ -916,7 +916,7 @@ describe("swarm-mail integration (embedded)", () => {
         granted: Array<{ id: number }>;
         conflicts?: unknown[];
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: [path1],
           exclusive: true,
@@ -930,7 +930,7 @@ describe("swarm-mail integration (embedded)", () => {
         granted: Array<{ id: number }>;
         conflicts?: unknown[];
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: [path2],
           exclusive: true,
@@ -951,7 +951,7 @@ describe("swarm-mail integration (embedded)", () => {
         conflicts?: Array<{ path: string; holders: string[] }>;
         warning?: string;
       }>(
-        swarmmail_reserve,
+        hivemail_reserve,
         {
           paths: [path2],
           exclusive: true,

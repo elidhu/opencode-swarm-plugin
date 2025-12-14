@@ -191,7 +191,7 @@ Use **imperative/infinitive form** throughout:
 |------|----------|
 | `skills_init` | Want full template structure with TODOs |
 | `skills_create` | Have complete content ready to write |
-| `swarm_learn` | Converting learned patterns to skills |
+| `hive_learn` | Converting learned patterns to skills |
 
 ### Managing Skills
 
@@ -216,7 +216,7 @@ When you discover something reusable during work:
 
 1. **Identify the pattern** - What worked well?
 2. **Consider scope** - Is it project-specific or universal?
-3. **Use `swarm_learn`** - Document the learning
+3. **Use `hive_learn`** - Document the learning
 4. **Create the skill** - Use `create_skill=true` or `skills_init`
 5. **Test and refine** - Iterate based on usage
 

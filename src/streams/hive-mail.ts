@@ -81,7 +81,7 @@ function generateSwarmAgentName(): string {
 // Types
 // ============================================================================
 
-export interface SwarmMailContext {
+export interface HiveMailContext {
   projectKey: string;
   agentName: string;
 }
@@ -216,7 +216,7 @@ export interface SwarmHealthResult {
  */
 export async function initSwarmAgent(
   options: InitSwarmAgentOptions,
-): Promise<SwarmMailContext> {
+): Promise<HiveMailContext> {
   const {
     projectPath,
     agentName = generateSwarmAgentName(),
@@ -530,7 +530,7 @@ export async function acknowledgeSwarmMessage(
 /**
  * Check if the swarm mail store is healthy
  */
-export async function checkSwarmHealth(
+export async function checkHiveHealth(
   projectPath?: string,
 ): Promise<SwarmHealthResult> {
   const healthy = await isDatabaseHealthy(projectPath);

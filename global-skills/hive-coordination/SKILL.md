@@ -1,27 +1,27 @@
 ---
-name: swarm-coordination
+name: hive-coordination
 description: Multi-agent coordination patterns for OpenCode swarm workflows. Use when working on complex tasks that benefit from parallelization, when coordinating multiple agents, or when managing task decomposition. Do NOT use for simple single-agent tasks.
 tags:
   - swarm
   - multi-agent
   - coordination
 tools:
-  - swarm_plan_prompt
-  - swarm_decompose
-  - swarm_validate_decomposition
-  - swarm_spawn_subtask
-  - swarm_complete
-  - swarm_status
-  - swarm_progress
+  - hive_plan_prompt
+  - hive_decompose
+  - hive_validate_decomposition
+  - hive_spawn_subtask
+  - hive_complete
+  - hive_status
+  - hive_progress
   - beads_create_epic
   - beads_query
-  - swarmmail_init
-  - swarmmail_send
-  - swarmmail_inbox
-  - swarmmail_read_message
-  - swarmmail_reserve
-  - swarmmail_release
-  - swarmmail_health
+  - hivemail_init
+  - hivemail_send
+  - hivemail_inbox
+  - hivemail_read_message
+  - hivemail_reserve
+  - hivemail_release
+  - hivemail_health
   - semantic-memory_find
   - cass_search
   - pdf-brain_search
@@ -31,21 +31,21 @@ references:
   - references/coordinator-patterns.md
 ---
 
-# Swarm Coordination
+# Hive Coordination
 
 Multi-agent orchestration for parallel task execution. The coordinator breaks work into subtasks, spawns worker agents, monitors progress, and aggregates results.
 
-## MANDATORY: Swarm Mail
+## MANDATORY: Hive Mail
 
-**ALL coordination MUST use `swarmmail_*` tools.** This is non-negotiable.
+**ALL coordination MUST use `hivemail_*` tools.** This is non-negotiable.
 
-Swarm Mail is embedded (no external server needed) and provides:
+Hive Mail is embedded (no external server needed) and provides:
 
 - File reservations to prevent conflicts
 - Message passing between agents
 - Thread-based coordination tied to beads
 
-## When to Swarm
+## When to Hive
 
 **DO swarm when:**
 
@@ -112,13 +112,13 @@ I'd recommend (a) because [reason]. Which approach?
 
 ## Coordinator Workflow
 
-### Phase 1: Initialize Swarm Mail (FIRST)
+### Phase 1: Initialize Hive Mail (FIRST)
 
 ```typescript
 // ALWAYS initialize first - registers you as coordinator
-await swarmmail_init({
+await hivemail_init({
   project_path: "$PWD",
-  task_description: "Swarm: <task summary>",
+  task_description: "Hive: <task summary>",
 });
 ```
 
@@ -154,10 +154,10 @@ Synthesize findings into `shared_context` for workers.
 
 ```typescript
 // DON'T DO THIS - pollutes main thread context
-const plan = await swarm_plan_prompt({ task, ... });
+const plan = await hive_plan_prompt({ task, ... });
 // ... agent reasons about decomposition inline ...
 // ... context fills with file contents, analysis ...
-const validation = await swarm_validate_decomposition({ ... });
+const validation = await hive_validate_decomposition({ ... });
 ```
 
 **✅ Correct Pattern (Context-Lean):**
@@ -184,10 +184,10 @@ ${taskDescription}
 ${synthesizedContext}
 
 ## Instructions
-1. Use swarm_plan_prompt(task="...", max_subtasks=5, query_cass=true)
+1. Use hive_plan_prompt(task="...", max_subtasks=5, query_cass=true)
 2. Reason about decomposition strategy
 3. Generate BeadTree JSON
-4. Validate with swarm_validate_decomposition
+4. Validate with hive_validate_decomposition
 5. Return ONLY the validated BeadTree JSON (no analysis, no file contents)
 
 Output format: Valid BeadTree JSON only.
@@ -212,11 +212,11 @@ await beads_create_epic({
 - **Scales to long swarms** - coordinator can manage 10+ workers without exhaustion
 - **Faster coordination** - less context = faster responses when monitoring workers
 
-### Phase 4: Reserve Files (via Swarm Mail)
+### Phase 4: Reserve Files (via Hive Mail)
 
 ```typescript
 // Reserve files for each subtask BEFORE spawning workers
-await swarmmail_reserve({
+await hivemail_reserve({
   paths: ["src/auth/**"],
   reason: "bd-123: Auth service implementation",
   ttl_seconds: 3600,
@@ -228,13 +228,13 @@ await swarmmail_reserve({
 
 - No file overlap between subtasks
 - Coordinator mediates conflicts
-- `swarm_complete` auto-releases
+- `hive_complete` auto-releases
 
 ### Phase 5: Spawn Workers
 
 ```typescript
 for (const subtask of subtasks) {
-  const prompt = await swarm_spawn_subtask({
+  const prompt = await hive_spawn_subtask({
     bead_id: subtask.id,
     epic_id: epic.id,
     subtask_title: subtask.title,
@@ -255,13 +255,13 @@ for (const subtask of subtasks) {
 
 ```typescript
 // Check progress
-const status = await swarm_status({ epic_id, project_key });
+const status = await hive_status({ epic_id, project_key });
 
 // Check for messages from workers
-const inbox = await swarmmail_inbox({ limit: 5 });
+const inbox = await hivemail_inbox({ limit: 5 });
 
 // Read specific message if needed
-const message = await swarmmail_read_message({ message_id: N });
+const message = await hivemail_read_message({ message_id: N });
 
 // Intervene if needed (see Intervention Patterns)
 ```
@@ -275,14 +275,14 @@ const message = await swarmmail_read_message({ message_id: N });
 - Record outcomes for learning
 
 ```typescript
-await swarm_complete({
+await hive_complete({
   project_key: "$PWD",
   agent_name: "coordinator",
   bead_id: epic_id,
   summary: "All subtasks complete",
   files_touched: [...],
 });
-await swarmmail_release(); // Release any remaining reservations
+await hivemail_release(); // Release any remaining reservations
 await beads_sync();
 ```
 
@@ -301,11 +301,11 @@ See `references/strategies.md` for full details.
 
 ## Communication Protocol
 
-Workers communicate via Swarm Mail with epic ID as thread:
+Workers communicate via Hive Mail with epic ID as thread:
 
 ```typescript
 // Progress update
-swarmmail_send({
+hivemail_send({
   to: ["coordinator"],
   subject: "Auth API complete",
   body: "Endpoints ready at /api/auth/*",
@@ -313,7 +313,7 @@ swarmmail_send({
 });
 
 // Blocker
-swarmmail_send({
+hivemail_send({
   to: ["coordinator"],
   subject: "BLOCKED: Need DB schema",
   body: "Can't proceed without users table",
@@ -360,13 +360,13 @@ One blocker affects multiple subtasks.
 | --------------------------- | ------------------------------------------ | ------------------------------------ |
 | **Decomposing Vague Tasks** | Wrong subtasks, wasted agent cycles        | Ask clarifying questions FIRST       |
 | **Mega-Coordinator**        | Coordinator editing files                  | Coordinator only orchestrates        |
-| **Silent Swarm**            | No communication, late conflicts           | Require updates, check inbox         |
+| **Silent Hive**            | No communication, late conflicts           | Require updates, check inbox         |
 | **Over-Decomposed**         | 10 subtasks for 20 lines                   | 2-5 subtasks max                     |
 | **Under-Specified**         | "Implement backend"                        | Clear goal, files, criteria          |
 | **Inline Planning** ⚠️      | Context pollution, exhaustion on long runs | Delegate planning to subagent        |
 | **Heavy File Reading**      | Coordinator reading 10+ files              | Subagent reads, returns summary only |
 | **Deep CASS Drilling**      | Multiple cass_search calls inline          | Subagent searches, summarizes        |
-| **Manual Decomposition**    | Hand-crafting subtasks without validation  | Use swarm_plan_prompt + validation   |
+| **Manual Decomposition**    | Hand-crafting subtasks without validation  | Use hive_plan_prompt + validation   |
 
 ## Shared Context Template
 
@@ -395,24 +395,24 @@ One blocker affects multiple subtasks.
 - Thread: {epic_id}
 ```
 
-## Swarm Mail Quick Reference
+## Hive Mail Quick Reference
 
 | Tool                     | Purpose                             |
 | ------------------------ | ----------------------------------- |
-| `swarmmail_init`         | Initialize session (REQUIRED FIRST) |
-| `swarmmail_send`         | Send message to agents              |
-| `swarmmail_inbox`        | Check inbox (max 5, no bodies)      |
-| `swarmmail_read_message` | Read specific message body          |
-| `swarmmail_reserve`      | Reserve files for exclusive editing |
-| `swarmmail_release`      | Release file reservations           |
-| `swarmmail_ack`          | Acknowledge message                 |
-| `swarmmail_health`       | Check database health               |
+| `hivemail_init`         | Initialize session (REQUIRED FIRST) |
+| `hivemail_send`         | Send message to agents              |
+| `hivemail_inbox`        | Check inbox (max 5, no bodies)      |
+| `hivemail_read_message` | Read specific message body          |
+| `hivemail_reserve`      | Reserve files for exclusive editing |
+| `hivemail_release`      | Release file reservations           |
+| `hivemail_ack`          | Acknowledge message                 |
+| `hivemail_health`       | Check database health               |
 
-## Full Swarm Flow
+## Full Hive Flow
 
 ```typescript
-// 1. Initialize Swarm Mail FIRST
-swarmmail_init({ project_path: "$PWD", task_description: "..." });
+// 1. Initialize Hive Mail FIRST
+hivemail_init({ project_path: "$PWD", task_description: "..." });
 
 // 2. Gather knowledge
 semantic_memory_find({ query });
@@ -421,24 +421,24 @@ pdf_brain_search({ query });
 skills_list();
 
 // 3. Decompose
-swarm_plan_prompt({ task });
-swarm_validate_decomposition();
+hive_plan_prompt({ task });
+hive_validate_decomposition();
 beads_create_epic();
 
 // 4. Reserve files
-swarmmail_reserve({ paths, reason, ttl_seconds });
+hivemail_reserve({ paths, reason, ttl_seconds });
 
 // 5. Spawn workers (loop)
-swarm_spawn_subtask();
+hive_spawn_subtask();
 
 // 6. Monitor
-swarm_status();
-swarmmail_inbox();
-swarmmail_read_message({ message_id });
+hive_status();
+hivemail_inbox();
+hivemail_read_message({ message_id });
 
 // 7. Complete
-swarm_complete();
-swarmmail_release();
+hive_complete();
+hivemail_release();
 beads_sync();
 ```
 

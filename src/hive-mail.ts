@@ -11,8 +11,8 @@
  * - File reservation with conflict detection
  *
  * CRITICAL CONSTRAINTS (same as agent-mail):
- * - swarmmail_inbox ALWAYS limits to 5 messages max
- * - swarmmail_inbox ALWAYS excludes bodies by default
+ * - hivemail_inbox ALWAYS limits to 5 messages max
+ * - hivemail_inbox ALWAYS excludes bodies by default
  * - Use summarize_thread instead of fetching all messages
  * - Auto-release reservations when tasks complete
  */
@@ -25,8 +25,8 @@ import {
   reserveSwarmFiles,
   releaseSwarmFiles,
   acknowledgeSwarmMessage,
-  checkSwarmHealth,
-} from "./streams/swarm-mail";
+  checkHiveHealth,
+} from "./streams/hive-mail";
 import { getActiveReservations } from "./streams/projections";
 import type { MailSessionState } from "./streams/events";
 import {
@@ -53,7 +53,7 @@ interface ToolContext {
  * @deprecated Use MailSessionState from streams/events.ts instead
  * This is kept for backward compatibility and re-exported as an alias
  */
-export type SwarmMailState = MailSessionState;
+export type HiveMailState = MailSessionState;
 
 /** Init tool arguments */
 interface InitArgs {
@@ -121,7 +121,7 @@ let swarmMailProjectDirectory: string | null = null;
  *
  * Called during plugin initialization with the actual project directory.
  */
-export function setSwarmMailProjectDirectory(directory: string): void {
+export function setHiveMailProjectDirectory(directory: string): void {
   swarmMailProjectDirectory = directory;
 }
 
@@ -129,7 +129,7 @@ export function setSwarmMailProjectDirectory(directory: string): void {
  * Get the default project directory
  * Returns undefined if not set - let getDatabasePath use global fallback
  */
-export function getSwarmMailProjectDirectory(): string | undefined {
+export function getHiveMailProjectDirectory(): string | undefined {
   return swarmMailProjectDirectory ?? undefined;
 }
 
@@ -138,27 +138,27 @@ export function getSwarmMailProjectDirectory(): string | undefined {
 // ============================================================================
 
 const SESSION_STATE_DIR =
-  process.env.SWARM_STATE_DIR || join(tmpdir(), "swarm-sessions");
+  process.env.HIVE_STATE_DIR || join(tmpdir(), "hive-sessions");
 
 function getSessionStatePath(sessionID: string): string {
   const safeID = sessionID.replace(/[^a-zA-Z0-9_-]/g, "_");
   return join(SESSION_STATE_DIR, `${safeID}.json`);
 }
 
-function loadSessionState(sessionID: string): SwarmMailState | null {
+function loadSessionState(sessionID: string): HiveMailState | null {
   const path = getSessionStatePath(sessionID);
   try {
     if (existsSync(path)) {
       const data = readFileSync(path, "utf-8");
-      return JSON.parse(data) as SwarmMailState;
+      return JSON.parse(data) as HiveMailState;
     }
   } catch (error) {
-    console.warn(`[swarm-mail] Could not load session state: ${error}`);
+    console.warn(`[hive-mail] Could not load session state: ${error}`);
   }
   return null;
 }
 
-function saveSessionState(sessionID: string, state: SwarmMailState): boolean {
+function saveSessionState(sessionID: string, state: HiveMailState): boolean {
   try {
     if (!existsSync(SESSION_STATE_DIR)) {
       mkdirSync(SESSION_STATE_DIR, { recursive: true });
@@ -167,7 +167,7 @@ function saveSessionState(sessionID: string, state: SwarmMailState): boolean {
     writeFileSync(path, JSON.stringify(state, null, 2));
     return true;
   } catch (error) {
-    console.warn(`[swarm-mail] Could not save session state: ${error}`);
+    console.warn(`[hive-mail] Could not save session state: ${error}`);
     return false;
   }
 }
@@ -190,7 +190,7 @@ export function clearSessionState(sessionID: string): void {
 /**
  * Initialize Swarm Mail session
  */
-export const swarmmail_init = tool({
+export const hivemail_init = tool({
   description:
     "Initialize Swarm Mail session. Creates agent identity and registers with the embedded event store.",
   args: {
@@ -210,7 +210,7 @@ export const swarmmail_init = tool({
   async execute(args: InitArgs, ctx: ToolContext): Promise<string> {
     // For init, we need a project path - use provided, stored, or cwd
     const projectPath =
-      args.project_path || getSwarmMailProjectDirectory() || process.cwd();
+      args.project_path || getHiveMailProjectDirectory() || process.cwd();
     const sessionID = ctx.sessionID || "default";
 
     // Check if already initialized
@@ -236,7 +236,7 @@ export const swarmmail_init = tool({
       });
 
       // Save session state
-      const state: SwarmMailState = {
+      const state: HiveMailState = {
         projectKey: result.projectKey,
         agentName: result.agentName,
         reservations: [],
@@ -268,7 +268,7 @@ export const swarmmail_init = tool({
 /**
  * Send message to other agents
  */
-export const swarmmail_send = tool({
+export const hivemail_send = tool({
   description: "Send message to other swarm agents",
   args: {
     to: tool.schema
@@ -295,7 +295,7 @@ export const swarmmail_send = tool({
 
     if (!state) {
       return JSON.stringify(
-        { error: "Session not initialized. Call swarmmail_init first." },
+        { error: "Session not initialized. Call hivemail_init first." },
         null,
         2,
       );
@@ -338,9 +338,9 @@ export const swarmmail_send = tool({
 /**
  * Fetch inbox (CONTEXT-SAFE: bodies excluded, limit 5)
  */
-export const swarmmail_inbox = tool({
+export const hivemail_inbox = tool({
   description:
-    "Fetch inbox (CONTEXT-SAFE: bodies excluded by default, max 5 messages). Use swarmmail_read_message for full body.",
+    "Fetch inbox (CONTEXT-SAFE: bodies excluded by default, max 5 messages). Use hivemail_read_message for full body.",
   args: {
     limit: tool.schema
       .number()
@@ -358,7 +358,7 @@ export const swarmmail_inbox = tool({
 
     if (!state) {
       return JSON.stringify(
-        { error: "Session not initialized. Call swarmmail_init first." },
+        { error: "Session not initialized. Call hivemail_init first." },
         null,
         2,
       );
@@ -384,7 +384,7 @@ export const swarmmail_inbox = tool({
             timestamp: m.created_at,
           })),
           total: result.total,
-          note: "Use swarmmail_read_message to fetch full body",
+          note: "Use hivemail_read_message to fetch full body",
         },
         null,
         2,
@@ -404,7 +404,7 @@ export const swarmmail_inbox = tool({
 /**
  * Fetch ONE message body by ID
  */
-export const swarmmail_read_message = tool({
+export const hivemail_read_message = tool({
   description:
     "Fetch ONE message body by ID. Use for reading full message content.",
   args: {
@@ -416,7 +416,7 @@ export const swarmmail_read_message = tool({
 
     if (!state) {
       return JSON.stringify(
-        { error: "Session not initialized. Call swarmmail_init first." },
+        { error: "Session not initialized. Call hivemail_init first." },
         null,
         2,
       );
@@ -466,7 +466,7 @@ export const swarmmail_read_message = tool({
 /**
  * Reserve file paths for exclusive editing
  */
-export const swarmmail_reserve = tool({
+export const hivemail_reserve = tool({
   description:
     "Reserve file paths for exclusive editing. Prevents conflicts with other agents.",
   args: {
@@ -492,7 +492,7 @@ export const swarmmail_reserve = tool({
 
     if (!state) {
       return JSON.stringify(
-        { error: "Session not initialized. Call swarmmail_init first." },
+        { error: "Session not initialized. Call hivemail_init first." },
         null,
         2,
       );
@@ -549,7 +549,7 @@ export const swarmmail_reserve = tool({
 /**
  * Release file reservations
  */
-export const swarmmail_release = tool({
+export const hivemail_release = tool({
   description: "Release file reservations. Call when done editing files.",
   args: {
     paths: tool.schema
@@ -567,7 +567,7 @@ export const swarmmail_release = tool({
 
     if (!state) {
       return JSON.stringify(
-        { error: "Session not initialized. Call swarmmail_init first." },
+        { error: "Session not initialized. Call hivemail_init first." },
         null,
         2,
       );
@@ -631,7 +631,7 @@ export const swarmmail_release = tool({
 /**
  * Acknowledge a message
  */
-export const swarmmail_ack = tool({
+export const hivemail_ack = tool({
   description:
     "Acknowledge a message (for messages that require acknowledgement)",
   args: {
@@ -643,7 +643,7 @@ export const swarmmail_ack = tool({
 
     if (!state) {
       return JSON.stringify(
-        { error: "Session not initialized. Call swarmmail_init first." },
+        { error: "Session not initialized. Call hivemail_init first." },
         null,
         2,
       );
@@ -679,7 +679,7 @@ export const swarmmail_ack = tool({
 /**
  * Check if Swarm Mail is healthy
  */
-export const swarmmail_health = tool({
+export const hivemail_health = tool({
   description: "Check if Swarm Mail embedded store is healthy",
   args: {},
   async execute(
@@ -689,10 +689,10 @@ export const swarmmail_health = tool({
     const sessionID = ctx.sessionID || "default";
     const state = loadSessionState(sessionID);
     // For health check, undefined is OK - database layer uses global fallback
-    const projectPath = state?.projectKey || getSwarmMailProjectDirectory();
+    const projectPath = state?.projectKey || getHiveMailProjectDirectory();
 
     try {
-      const result = await checkSwarmHealth(projectPath);
+      const result = await checkHiveHealth(projectPath);
 
       return JSON.stringify(
         {
@@ -727,13 +727,13 @@ export const swarmmail_health = tool({
 // Exports
 // ============================================================================
 
-export const swarmMailTools = {
-  swarmmail_init: swarmmail_init,
-  swarmmail_send: swarmmail_send,
-  swarmmail_inbox: swarmmail_inbox,
-  swarmmail_read_message: swarmmail_read_message,
-  swarmmail_reserve: swarmmail_reserve,
-  swarmmail_release: swarmmail_release,
-  swarmmail_ack: swarmmail_ack,
-  swarmmail_health: swarmmail_health,
+export const hiveMailTools = {
+  hivemail_init: hivemail_init,
+  hivemail_send: hivemail_send,
+  hivemail_inbox: hivemail_inbox,
+  hivemail_read_message: hivemail_read_message,
+  hivemail_reserve: hivemail_reserve,
+  hivemail_release: hivemail_release,
+  hivemail_ack: hivemail_ack,
+  hivemail_health: hivemail_health,
 };

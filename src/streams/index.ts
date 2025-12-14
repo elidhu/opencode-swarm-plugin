@@ -92,7 +92,7 @@ export async function withTiming<T>(
     const duration = performance.now() - start;
     if (duration > SLOW_QUERY_THRESHOLD_MS) {
       console.warn(
-        `[SwarmMail] Slow operation: ${operation} took ${duration.toFixed(1)}ms`,
+        `[HiveMail] Slow operation: ${operation} took ${duration.toFixed(1)}ms`,
       );
     }
   }
@@ -191,7 +191,7 @@ function evictLRU(): void {
     if (db) {
       db.close().catch((err) => {
         console.error(
-          `[swarm-mail] Failed to close evicted database: ${err.message}`,
+          `[hive-mail] Failed to close evicted database: ${err.message}`,
         );
       });
     }
@@ -278,14 +278,14 @@ async function createDatabaseInstance(dbPath: string): Promise<PGlite> {
       stack: err.stack,
     });
     console.error(
-      `[swarm-mail] Failed to initialize database at ${dbPath}:`,
+      `[hive-mail] Failed to initialize database at ${dbPath}:`,
       err.message,
     );
     degradedInstances.set(dbPath, err);
 
     // Fall back to in-memory database
     console.warn(
-      `[swarm-mail] Falling back to in-memory database (data will not persist)`,
+      `[hive-mail] Falling back to in-memory database (data will not persist)`,
     );
 
     try {
@@ -299,7 +299,7 @@ async function createDatabaseInstance(dbPath: string): Promise<PGlite> {
     } catch (fallbackError) {
       const fallbackErr = fallbackError as Error;
       console.error(
-        `[swarm-mail] CRITICAL: In-memory fallback failed:`,
+        `[hive-mail] CRITICAL: In-memory fallback failed:`,
         fallbackErr.message,
       );
       throw new Error(
@@ -487,7 +487,7 @@ export async function isDatabaseHealthy(
   if (degradedInstances.has(dbPath)) {
     const err = degradedInstances.get(dbPath);
     console.error(
-      `[swarm-mail] Database is in degraded mode (using in-memory fallback). Original error: ${err?.message}`,
+      `[hive-mail] Database is in degraded mode (using in-memory fallback). Original error: ${err?.message}`,
     );
     return false;
   }
@@ -498,7 +498,7 @@ export async function isDatabaseHealthy(
     return result.rows.length > 0;
   } catch (error) {
     const err = error as Error;
-    console.error(`[swarm-mail] Health check failed: ${err.message}`);
+    console.error(`[hive-mail] Health check failed: ${err.message}`);
     return false;
   }
 }
@@ -575,4 +575,4 @@ export * from "./events";
 export * from "./migrations";
 export * from "./projections";
 export * from "./store";
-export * from "./swarm-mail";
+export * from "./hive-mail";

@@ -9,12 +9,12 @@
  * - Learning from outcomes
  *
  * Key responsibilities:
- * - swarm_init - Check tools and discover skills
- * - swarm_status - Query epic progress
- * - swarm_progress - Report agent progress
- * - swarm_complete - Verification gate and completion
- * - swarm_record_outcome - Learning signals
- * - swarm_broadcast - Mid-task context sharing
+ * - hive_init - Check tools and discover skills
+ * - hive_status - Query epic progress
+ * - hive_progress - Report agent progress
+ * - hive_complete - Verification gate and completion
+ * - hive_record_outcome - Learning signals
+ * - hive_broadcast - Mid-task context sharing
  * - Error accumulation tools
  * - 3-strike detection for architectural problems
  */
@@ -36,7 +36,7 @@ import {
   getSwarmInbox,
   releaseSwarmFiles,
   sendSwarmMessage,
-} from "./streams/swarm-mail";
+} from "./streams/hive-mail";
 import {
   addStrike,
   clearStrikes,
@@ -88,7 +88,7 @@ async function queryEpicSubtasks(epicId: string): Promise<Bead[]> {
   if (result.exitCode !== 0) {
     // Don't throw - just return empty and log error prominently
     console.error(
-      `[swarm] ERROR: Failed to query subtasks for epic ${epicId}:`,
+      `[hive] ERROR: Failed to query subtasks for epic ${epicId}:`,
       result.stderr.toString(),
     );
     return [];
@@ -100,13 +100,13 @@ async function queryEpicSubtasks(epicId: string): Promise<Bead[]> {
   } catch (error) {
     if (error instanceof z.ZodError) {
       console.error(
-        `[swarm] ERROR: Invalid bead data for epic ${epicId}:`,
+        `[hive] ERROR: Invalid bead data for epic ${epicId}:`,
         error.message,
       );
       return [];
     }
     console.error(
-      `[swarm] ERROR: Failed to parse beads for epic ${epicId}:`,
+      `[hive] ERROR: Failed to parse beads for epic ${epicId}:`,
       error,
     );
     throw error;
@@ -120,15 +120,14 @@ async function querySwarmMessages(
   projectKey: string,
   threadId: string,
 ): Promise<number> {
-  // Check if agent-mail is available
-  const agentMailAvailable = await isToolAvailable("agent-mail");
-  if (!agentMailAvailable) {
-    // Don't warn here - it's checked elsewhere
+  // Check if hive-mail is available
+  const hiveMailAvailable = await isToolAvailable("hive-mail");
+  if (!hiveMailAvailable) {
     return 0;
   }
 
   try {
-    // Use embedded swarm-mail inbox to count messages in thread
+    // Use embedded hive-mail inbox to count messages in thread
     const inbox = await getSwarmInbox({
       projectPath: projectKey,
       agentName: "coordinator", // Dummy agent name for thread query
@@ -144,7 +143,7 @@ async function querySwarmMessages(
   } catch (error) {
     // Thread might not exist yet, or query failed
     console.warn(
-      `[swarm] Failed to query swarm messages for thread ${threadId}:`,
+      `[hive] Failed to query swarm messages for thread ${threadId}:`,
       error,
     );
     return 0;
@@ -202,105 +201,6 @@ interface VerificationGateResult {
   steps: VerificationStep[];
   summary: string;
   blockers: string[];
-}
-
-/**
- * UBS scan result schema
- */
-interface UbsScanResult {
-  exitCode: number;
-  bugs: Array<{
-    file: string;
-    line: number;
-    severity: string;
-    message: string;
-    category: string;
-  }>;
-  summary: {
-    total: number;
-    critical: number;
-    high: number;
-    medium: number;
-    low: number;
-  };
-}
-
-/**
- * Run UBS scan on files before completion
- *
- * @param files - Files to scan
- * @returns Scan result or null if UBS not available
- */
-async function runUbsScan(files: string[]): Promise<UbsScanResult | null> {
-  if (files.length === 0) {
-    return null;
-  }
-
-  // Check if UBS is available first
-  const ubsAvailable = await isToolAvailable("ubs");
-  if (!ubsAvailable) {
-    warnMissingTool("ubs");
-    return null;
-  }
-
-  try {
-    // Run UBS scan with JSON output
-    const result = await Bun.$`ubs scan ${files.join(" ")} --json`
-      .quiet()
-      .nothrow();
-
-    const output = result.stdout.toString();
-    if (!output.trim()) {
-      return {
-        exitCode: result.exitCode,
-        bugs: [],
-        summary: { total: 0, critical: 0, high: 0, medium: 0, low: 0 },
-      };
-    }
-
-    try {
-      const parsed = JSON.parse(output);
-
-      // Basic validation of structure
-      if (typeof parsed !== "object" || parsed === null) {
-        throw new Error("UBS output is not an object");
-      }
-      if (!Array.isArray(parsed.bugs)) {
-        console.warn("[swarm] UBS output missing bugs array, using empty");
-      }
-      if (typeof parsed.summary !== "object" || parsed.summary === null) {
-        console.warn("[swarm] UBS output missing summary object, using empty");
-      }
-
-      return {
-        exitCode: result.exitCode,
-        bugs: Array.isArray(parsed.bugs) ? parsed.bugs : [],
-        summary: parsed.summary || {
-          total: 0,
-          critical: 0,
-          high: 0,
-          medium: 0,
-          low: 0,
-        },
-      };
-    } catch (error) {
-      // UBS output wasn't JSON - this is an error condition
-      console.error(
-        `[swarm] CRITICAL: UBS scan failed to parse JSON output because output is malformed:`,
-        error,
-      );
-      console.error(
-        `[swarm] Raw output: ${output}. Try: Run 'ubs doctor' to check installation, verify UBS version with 'ubs --version' (need v1.0.0+), or check if UBS supports --json flag.`,
-      );
-      return {
-        exitCode: result.exitCode,
-        bugs: [],
-        summary: { total: 0, critical: 0, high: 0, medium: 0, low: 0 },
-      };
-    }
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -426,51 +326,18 @@ async function runTestVerification(
  * Run the full Verification Gate
  *
  * Implements the Gate Function (IDENTIFY → RUN → READ → VERIFY → CLAIM):
- * 1. UBS scan (already exists)
- * 2. Typecheck
- * 3. Tests for touched files
+ * 1. Typecheck
+ * 2. Tests for touched files
  *
  * All steps must pass (or be skipped with valid reason) to proceed.
  */
 async function runVerificationGate(
   filesTouched: string[],
-  skipUbs: boolean = false,
 ): Promise<VerificationGateResult> {
   const steps: VerificationStep[] = [];
   const blockers: string[] = [];
 
-  // Step 1: UBS scan
-  if (!skipUbs && filesTouched.length > 0) {
-    const ubsResult = await runUbsScan(filesTouched);
-    if (ubsResult) {
-      const ubsStep: VerificationStep = {
-        name: "ubs_scan",
-        command: `ubs scan ${filesTouched.join(" ")}`,
-        passed: ubsResult.summary.critical === 0,
-        exitCode: ubsResult.exitCode,
-      };
-
-      if (!ubsStep.passed) {
-        ubsStep.error = `Found ${ubsResult.summary.critical} critical bugs`;
-        blockers.push(
-          `UBS found ${ubsResult.summary.critical} critical bug(s). Try: Run 'ubs scan ${filesTouched.join(" ")}' to see details, fix critical bugs in reported files, or use skip_ubs_scan=true to bypass (not recommended).`,
-        );
-      }
-
-      steps.push(ubsStep);
-    } else {
-      steps.push({
-        name: "ubs_scan",
-        command: "ubs scan",
-        passed: true,
-        exitCode: 0,
-        skipped: true,
-        skipReason: "UBS not available",
-      });
-    }
-  }
-
-  // Step 2: Typecheck
+  // Step 1: Typecheck
   const typecheckStep = await runTypecheckVerification();
   steps.push(typecheckStep);
   if (!typecheckStep.passed && !typecheckStep.skipped) {
@@ -572,7 +439,7 @@ const globalStrikeStorage: StrikeStorage = new InMemoryStrikeStorage();
  * - .claude/skills/
  * - skills/
  */
-export const swarm_init = tool({
+export const hive_init = tool({
   description:
     "Initialize swarm session: discovers available skills, checks tool availability. ALWAYS call at swarm start.",
   args: {
@@ -590,8 +457,8 @@ export const swarm_init = tool({
 
     // Check critical tools
     const beadsAvailable = availability.get("beads")?.status.available ?? false;
-    const agentMailAvailable =
-      availability.get("agent-mail")?.status.available ?? false;
+    const hiveMailAvailable =
+      availability.get("hive-mail")?.status.available ?? false;
 
     // Build warnings
     const warnings: string[] = [];
@@ -599,24 +466,16 @@ export const swarm_init = tool({
 
     if (!beadsAvailable) {
       warnings.push(
-        "⚠️  beads (bd) not available - issue tracking disabled, swarm coordination will be limited",
+        "⚠️  beads (bd) not available - issue tracking disabled, hive coordination will be limited",
       );
       degradedFeatures.push("issue tracking", "progress persistence");
     }
 
-    if (!agentMailAvailable) {
+    if (!hiveMailAvailable) {
       warnings.push(
-        "⚠️  agent-mail not available - multi-agent communication disabled",
+        "⚠️  hive-mail not available - multi-agent communication disabled",
       );
       degradedFeatures.push("agent communication", "file reservations");
-    }
-
-    if (!availability.get("cass")?.status.available) {
-      degradedFeatures.push("historical context from past sessions");
-    }
-
-    if (!availability.get("ubs")?.status.available) {
-      degradedFeatures.push("pre-completion bug scanning");
     }
 
     if (!availability.get("semantic-memory")?.status.available) {
@@ -665,7 +524,7 @@ export const swarm_init = tool({
           beads: beadsAvailable
             ? "✓ Use beads for all task tracking"
             : "Install beads: npm i -g @joelhooks/beads",
-          agent_mail: agentMailAvailable
+          agent_mail: hiveMailAvailable
             ? "✓ Use Agent Mail for coordination"
             : "Start Agent Mail: agent-mail serve",
         },
@@ -682,7 +541,7 @@ export const swarm_init = tool({
  *
  * Requires project_key to query Agent Mail for message counts.
  */
-export const swarm_status = tool({
+export const hive_status = tool({
   description: "Get status of a swarm by epic ID",
   args: {
     epic_id: tool.schema.string().describe("Epic bead ID (e.g., bd-abc123)"),
@@ -773,7 +632,7 @@ export const swarm_status = tool({
  *
  * Takes explicit agent identity since tools don't have persistent state.
  */
-export const swarm_progress = tool({
+export const hive_progress = tool({
   description: "Report progress on a subtask to coordinator",
   args: {
     project_key: tool.schema.string().describe("Project path"),
@@ -825,7 +684,7 @@ export const swarm_progress = tool({
       ? args.bead_id.split(".")[0]
       : args.bead_id;
 
-    // Send progress message to thread using embedded swarm-mail
+    // Send progress message to thread using embedded hive-mail
     await sendSwarmMessage({
       projectPath: args.project_key,
       fromAgent: args.agent_name,
@@ -849,7 +708,7 @@ export const swarm_progress = tool({
  *
  * Based on "Patterns for Building AI Agents" p.31: "Ensure subagents can share context along the way"
  */
-export const swarm_broadcast = tool({
+export const hive_broadcast = tool({
   description:
     "Broadcast context update to all agents working on the same epic",
   args: {
@@ -900,7 +759,7 @@ export const swarm_broadcast = tool({
           ? "high"
           : "normal";
 
-    // Send as broadcast to thread using embedded swarm-mail
+    // Send as broadcast to thread using embedded hive-mail
     await sendSwarmMessage({
       projectPath: args.project_path,
       fromAgent: args.agent_name,
@@ -940,9 +799,9 @@ export const swarm_broadcast = tool({
  *
  * Closes bead, releases reservations, notifies coordinator.
  */
-export const swarm_complete = tool({
+export const hive_complete = tool({
   description:
-    "Mark subtask complete with Verification Gate. Runs UBS scan, typecheck, and tests before allowing completion.",
+    "Mark subtask complete with Verification Gate. Runs typecheck and tests before allowing completion.",
   args: {
     project_key: tool.schema.string().describe("Project path"),
     agent_name: tool.schema.string().describe("Your Agent Mail name"),
@@ -955,16 +814,12 @@ export const swarm_complete = tool({
     files_touched: tool.schema
       .array(tool.schema.string())
       .optional()
-      .describe("Files modified - will be verified (UBS, typecheck, tests)"),
-    skip_ubs_scan: tool.schema
-      .boolean()
-      .optional()
-      .describe("Skip UBS bug scan (default: false)"),
+      .describe("Files modified - will be verified (typecheck, tests)"),
     skip_verification: tool.schema
       .boolean()
       .optional()
       .describe(
-        "Skip ALL verification (UBS, typecheck, tests). Use sparingly! (default: false)",
+        "Skip ALL verification (typecheck, tests). Use sparingly! (default: false)",
       ),
   },
   async execute(args) {
@@ -972,10 +827,7 @@ export const swarm_complete = tool({
     let verificationResult: VerificationGateResult | null = null;
 
     if (!args.skip_verification && args.files_touched?.length) {
-      verificationResult = await runVerificationGate(
-        args.files_touched,
-        args.skip_ubs_scan ?? false,
-      );
+      verificationResult = await runVerificationGate(args.files_touched);
 
       // Block completion if verification failed
       if (!verificationResult.passed) {
@@ -1001,40 +853,6 @@ export const swarm_complete = tool({
                 : "Fix the failing checks and try again. Use skip_verification=true only as last resort.",
             gate_function:
               "IDENTIFY → RUN → READ → VERIFY → CLAIM (you are at VERIFY, claim blocked)",
-          },
-          null,
-          2,
-        );
-      }
-    }
-
-    // Legacy UBS-only path for backward compatibility (when no files_touched)
-    let ubsResult: UbsScanResult | null = null;
-    if (
-      !args.skip_verification &&
-      !verificationResult &&
-      args.files_touched?.length &&
-      !args.skip_ubs_scan
-    ) {
-      ubsResult = await runUbsScan(args.files_touched);
-
-      // Block completion if critical bugs found
-      if (ubsResult && ubsResult.summary.critical > 0) {
-        return JSON.stringify(
-          {
-            success: false,
-            error: `UBS found ${ubsResult.summary.critical} critical bug(s) that must be fixed before completing`,
-            ubs_scan: {
-              critical_count: ubsResult.summary.critical,
-              bugs: ubsResult.bugs.filter((b) => b.severity === "critical"),
-            },
-            hint: `Fix these critical bugs: ${ubsResult.bugs
-              .filter((b) => b.severity === "critical")
-              .map((b) => `${b.file}:${b.line} - ${b.message}`)
-              .slice(0, 3)
-              .join(
-                "; ",
-              )}. Try: Run 'ubs scan ${args.files_touched?.join(" ") || "."} --json' for full report, fix reported issues, or use skip_ubs_scan=true to bypass (not recommended).`,
           },
           null,
           2,
@@ -1086,7 +904,7 @@ export const swarm_complete = tool({
       );
     }
 
-    // Release file reservations for this agent using embedded swarm-mail
+    // Release file reservations for this agent using embedded hive-mail
     try {
       await releaseSwarmFiles({
         projectPath: args.project_key,
@@ -1097,7 +915,7 @@ export const swarm_complete = tool({
       // Release might fail (e.g., no reservations existed)
       // This is non-fatal - log and continue
       console.warn(
-        `[swarm] Failed to release file reservations for ${args.agent_name}:`,
+        `[hive] Failed to release file reservations for ${args.agent_name}:`,
         error,
       );
     }
@@ -1107,7 +925,7 @@ export const swarm_complete = tool({
       ? args.bead_id.split(".")[0]
       : args.bead_id;
 
-    // Send completion message using embedded swarm-mail
+    // Send completion message using embedded hive-mail
     const completionBody = [
       `## Subtask Complete: ${args.bead_id}`,
       "",
@@ -1154,21 +972,6 @@ export const swarm_complete = tool({
         : args.skip_verification
           ? { skipped: true, reason: "skip_verification=true" }
           : { skipped: true, reason: "no files_touched provided" },
-      ubs_scan: ubsResult
-        ? {
-            ran: true,
-            bugs_found: ubsResult.summary.total,
-            summary: ubsResult.summary,
-            warnings: ubsResult.bugs.filter((b) => b.severity !== "critical"),
-          }
-        : verificationResult
-          ? { ran: true, included_in_verification_gate: true }
-          : {
-              ran: false,
-              reason: args.skip_ubs_scan
-                ? "skipped"
-                : "no files or ubs unavailable",
-            },
       learning_prompt: `## Reflection
 
 Did you learn anything reusable during this subtask? Consider:
@@ -1178,7 +981,7 @@ Did you learn anything reusable during this subtask? Consider:
 3. **Best Practices**: Domain-specific guidelines worth documenting?
 4. **Tool Usage**: Effective ways to use tools for this type of task?
 
-If you discovered something valuable, use \`swarm_learn\` or \`skills_create\` to preserve it as a skill for future swarms.
+If you discovered something valuable, use \`hive_learn\` or \`skills_create\` to preserve it as a skill for future swarms.
 
 Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
       // Add semantic-memory integration on success
@@ -1205,7 +1008,7 @@ Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
  *
  * @see src/learning.ts for scoring logic
  */
-export const swarm_record_outcome = tool({
+export const hive_record_outcome = tool({
   description:
     "Record subtask outcome for implicit feedback scoring. Tracks duration, errors, retries to learn decomposition quality.",
   args: {
@@ -1362,7 +1165,7 @@ export const swarm_record_outcome = tool({
  * Errors are accumulated and can be fed into retry prompts to help
  * agents learn from past failures.
  */
-export const swarm_accumulate_error = tool({
+export const hive_accumulate_error = tool({
   description:
     "Record an error during subtask execution. Errors feed into retry prompts.",
   args: {
@@ -1401,7 +1204,7 @@ export const swarm_accumulate_error = tool({
         error_type: entry.error_type,
         message: entry.message,
         timestamp: entry.timestamp,
-        note: "Error recorded for retry context. Use swarm_get_error_context to retrieve accumulated errors.",
+        note: "Error recorded for retry context. Use hive_get_error_context to retrieve accumulated errors.",
       },
       null,
       2,
@@ -1415,7 +1218,7 @@ export const swarm_accumulate_error = tool({
  * Returns formatted error context that can be injected into retry prompts
  * to help agents learn from past failures.
  */
-export const swarm_get_error_context = tool({
+export const hive_get_error_context = tool({
   description:
     "Get accumulated errors for a bead. Returns formatted context for retry prompts.",
   args: {
@@ -1458,7 +1261,7 @@ export const swarm_get_error_context = tool({
  * Call this after an agent successfully addresses an error to update
  * the accumulator state.
  */
-export const swarm_resolve_error = tool({
+export const hive_resolve_error = tool({
   description:
     "Mark an error as resolved after fixing it. Updates error accumulator state.",
   args: {
@@ -1497,7 +1300,7 @@ export const swarm_resolve_error = tool({
  * - Record a strike when a fix fails
  * - Clear strikes when a fix succeeds
  */
-export const swarm_check_strikes = tool({
+export const hive_check_strikes = tool({
   description:
     "Check 3-strike status for a bead. Records failures, detects architectural problems, generates architecture review prompts.",
   args: {
@@ -1656,7 +1459,7 @@ export const swarm_check_strikes = tool({
  *
  * Implements the "learning swarm" pattern where swarms get smarter over time.
  */
-export const swarm_learn = tool({
+export const hive_learn = tool({
   description: `Analyze completed work and optionally create a skill from learned patterns.
 
 Use after completing a subtask when you've discovered:
@@ -1855,15 +1658,15 @@ ${args.files_context && args.files_context.length > 0 ? `## Reference Files\n\n$
 // ============================================================================
 
 export const orchestrateTools = {
-  swarm_init,
-  swarm_status,
-  swarm_progress,
-  swarm_broadcast,
-  swarm_complete,
-  swarm_record_outcome,
-  swarm_accumulate_error,
-  swarm_get_error_context,
-  swarm_resolve_error,
-  swarm_check_strikes,
-  swarm_learn,
+  hive_init,
+  hive_status,
+  hive_progress,
+  hive_broadcast,
+  hive_complete,
+  hive_record_outcome,
+  hive_accumulate_error,
+  hive_get_error_context,
+  hive_resolve_error,
+  hive_check_strikes,
+  hive_learn,
 };
