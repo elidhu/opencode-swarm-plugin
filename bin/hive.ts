@@ -26,14 +26,6 @@ const VERSION: string = pkg.version;
 // ASCII Art & Branding
 // ============================================================================
 
-const BEE = `
-    \\ \` - ' /
-   - .(o o). -
-    (  >.<  )
-     /|   |\\
-    (_|   |_)  bzzzz...
-`;
-
 const HONEYCOMB = `
   / \\__/ \\__/ \\__/ \\__/ \\
   \\__/ \\__/ \\__/ \\__/ \\__/
@@ -143,14 +135,7 @@ function getRandomMessage(): string {
   return messages[Math.floor(Math.random() * messages.length)];
 }
 
-function getDecoratedBee(): string {
-  const { decorations } = getSeasonalBee();
-  if (!decorations || Math.random() > 0.5) return cyan(BEE);
 
-  const decoration =
-    decorations[Math.floor(Math.random() * decorations.length)];
-  return cyan(BEE.replace("bzzzz...", `bzzzz... ${decoration}`));
-}
 
 // ============================================================================
 // Model Configuration
@@ -576,7 +561,6 @@ async function setup() {
   console.clear();
   console.log(yellow(HONEYCOMB));
   console.log(yellow(BANNER));
-  console.log(getDecoratedBee());
   console.log();
   console.log(magenta("  " + getRandomMessage()));
   console.log();
@@ -1069,7 +1053,6 @@ async function help() {
   console.log(yellow(HONEYCOMB));
   console.log(yellow(BANNER));
   console.log(dim("  " + TAGLINE + " v" + VERSION));
-  console.log(getDecoratedBee());
   console.log(magenta("  " + getRandomMessage()));
   console.log(`
 ${cyan("Commands:")}
