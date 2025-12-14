@@ -419,7 +419,7 @@ describe("beads integration", () => {
       expect(epicResult.subtasks).toHaveLength(3);
 
       // Subtasks should have IDs that indicate parent relationship
-      // Format: {epic_id}.{index} e.g., "opencode-swarm-plugin-abc.1"
+      // Format: {epic_id}.{index} e.g., "opencode-hive-plugin-abc.1"
       for (const subtask of epicResult.subtasks) {
         expect(subtask.id).toContain(epicResult.epic.id);
         expect(subtask.id).toMatch(/\.\d+$/); // ends with .N

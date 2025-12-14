@@ -1,5 +1,5 @@
 /**
- * Swarm Module - High-level swarm coordination
+ * Hive Module - High-level hive coordination
  *
  * This module re-exports from focused submodules for backward compatibility.
  * For new code, prefer importing from specific modules:
@@ -8,7 +8,7 @@
  * - hive-prompts.ts - Prompt templates
  * - hive-orchestrate.ts - Status and completion
  *
- * @module swarm
+ * @module hive
  */
 
 // Re-export everything for backward compatibility
@@ -24,7 +24,7 @@ import { promptTools } from "./hive-prompts";
 import { orchestrateTools } from "./hive-orchestrate";
 
 /**
- * Combined swarm tools for plugin registration.
+ * Combined hive tools for plugin registration.
  * Includes all tools from strategy, decompose, prompt, and orchestrate modules.
  */
 export const hiveTools = {

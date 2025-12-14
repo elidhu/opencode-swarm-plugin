@@ -10,7 +10,7 @@
  * - `BeadTypeSchema` - Type enum (bug, feature, task, epic, chore)
  * - `SubtaskSpecSchema` - Subtask specification for epic creation
  *
- * ## Task Schemas (Swarm Decomposition)
+ * ## Task Schemas (Hive Decomposition)
  * - `TaskDecompositionSchema` - Full task breakdown
  * - `DecomposedSubtaskSchema` - Individual subtask definition
  * - `BeadTreeSchema` - Epic + subtasks structure
@@ -19,8 +19,8 @@
  * - `EvaluationSchema` - Complete evaluation with criteria
  * - `CriterionEvaluationSchema` - Single criterion result
  *
- * ## Progress Schemas (Swarm Coordination)
- * - `SwarmStatusSchema` - Overall swarm progress
+ * ## Progress Schemas (Hive Coordination)
+ * - `SwarmStatusSchema` - Overall hive progress
  * - `AgentProgressSchema` - Individual agent status
  * - `SpawnedAgentSchema` - Spawned agent metadata
  *

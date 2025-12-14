@@ -1464,11 +1464,11 @@ export const skillsTools = {
 };
 
 // =============================================================================
-// Swarm Integration
+// Hive Integration
 // =============================================================================
 
 /**
- * Get skill context for swarm task decomposition
+ * Get skill context for hive task decomposition
  *
  * Returns a summary of available skills that can be referenced
  * in subtask prompts for specialized handling.

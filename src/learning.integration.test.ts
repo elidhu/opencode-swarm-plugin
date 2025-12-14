@@ -2,10 +2,10 @@
  * Learning Module Integration Tests
  *
  * Tests for confidence decay, feedback scoring, outcome tracking,
- * anti-patterns, pattern maturity, and swarm tool integrations.
+ * anti-patterns, pattern maturity, and hive tool integrations.
  *
  * These tests don't require external services - they test the learning
- * algorithms and their integration with swarm tools.
+ * algorithms and their integration with hive tools.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -36,7 +36,7 @@ import {
   InMemoryPatternStorage,
   DEFAULT_ANTI_PATTERN_CONFIG,
   type DecompositionPattern,
-} from "./anti-patterns";
+} from "./pattern-maturity";
 
 // Pattern maturity module
 import {

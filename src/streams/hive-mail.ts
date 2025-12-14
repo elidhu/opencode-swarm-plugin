@@ -1,5 +1,5 @@
 /**
- * Swarm Mail - Embedded event-sourced implementation
+ * Hive Mail - Embedded event-sourced implementation
  *
  * Replaces the MCP-based agent-mail with embedded PGLite storage.
  * Same API surface, but no external server dependency.
@@ -210,7 +210,7 @@ export interface SwarmHealthResult {
 // ============================================================================
 
 /**
- * Initialize a swarm agent for this session
+ * Initialize a hive agent for this session
  *
  * Future: Can use DurableMailbox.create() for actor-style message consumption
  */
@@ -244,7 +244,7 @@ export async function initSwarmAgent(
 // ============================================================================
 
 /**
- * Send a message to other swarm agents
+ * Send a message to other hive agents
  *
  * Future: Use DurableMailbox.send() for envelope pattern with replyTo support
  */
@@ -293,7 +293,7 @@ export async function sendSwarmMessage(
 }
 
 /**
- * Get inbox messages for a swarm agent
+ * Get inbox messages for a hive agent
  *
  * Future: Use DurableCursor.consume() for positioned consumption with checkpointing
  */
@@ -499,7 +499,7 @@ export async function releaseSwarmFiles(
 // ============================================================================
 
 /**
- * Acknowledge a swarm message
+ * Acknowledge a hive message
  */
 export async function acknowledgeSwarmMessage(
   options: AcknowledgeSwarmOptions,
@@ -528,7 +528,7 @@ export async function acknowledgeSwarmMessage(
 // ============================================================================
 
 /**
- * Check if the swarm mail store is healthy
+ * Check if the hive mail store is healthy
  */
 export async function checkHiveHealth(
   projectPath?: string,

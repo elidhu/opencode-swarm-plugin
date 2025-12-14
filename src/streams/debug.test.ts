@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetDatabase } from "./index";
-import { initAgent, sendAgentMessage, reserveAgentFiles } from "./mail-core";
+import { initSwarmAgent, sendSwarmMessage, reserveSwarmFiles } from "./hive-mail";
 import {
   debugEvents,
   debugAgent,
@@ -34,8 +34,8 @@ describe("Debug Tools", () => {
   describe("debugEvents", () => {
     it("returns recent events in reverse chronological order", async () => {
       // Setup: create some events
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
 
       const result = await debugEvents({ projectPath });
 
@@ -47,8 +47,8 @@ describe("Debug Tools", () => {
     });
 
     it("filters by event type", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await sendAgentMessage({
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -66,9 +66,9 @@ describe("Debug Tools", () => {
     });
 
     it("filters by agent name", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
-      await sendAgentMessage({
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -94,9 +94,9 @@ describe("Debug Tools", () => {
     });
 
     it("limits results", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
-      await initAgent({ projectPath, agentName: "Agent3" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent3" });
 
       const result = await debugEvents({ projectPath, limit: 2 });
 
@@ -105,7 +105,7 @@ describe("Debug Tools", () => {
     });
 
     it("includes human-readable timestamps", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
       const result = await debugEvents({ projectPath });
 
@@ -122,7 +122,7 @@ describe("Debug Tools", () => {
 
   describe("debugAgent", () => {
     it("returns agent details with activity summary", async () => {
-      await initAgent({
+      await initSwarmAgent({
         projectPath,
         agentName: "TestAgent",
         program: "opencode",
@@ -140,17 +140,17 @@ describe("Debug Tools", () => {
     });
 
     it("includes message counts", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
 
-      await sendAgentMessage({
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
         subject: "Test 1",
         body: "Hello",
       });
-      await sendAgentMessage({
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -165,8 +165,8 @@ describe("Debug Tools", () => {
     });
 
     it("includes active reservations", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await reserveAgentFiles({
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent1",
         paths: ["src/a.ts", "src/b.ts"],
@@ -181,8 +181,8 @@ describe("Debug Tools", () => {
     });
 
     it("includes recent events for the agent", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await sendAgentMessage({
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -216,10 +216,10 @@ describe("Debug Tools", () => {
 
   describe("debugMessage", () => {
     it("returns message with full audit trail", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
 
-      const sendResult = await sendAgentMessage({
+      const sendResult = await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -243,11 +243,11 @@ describe("Debug Tools", () => {
     });
 
     it("includes recipient status", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
-      await initAgent({ projectPath, agentName: "Agent3" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent3" });
 
-      const sendResult = await sendAgentMessage({
+      const sendResult = await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2", "Agent3"],
@@ -268,9 +268,9 @@ describe("Debug Tools", () => {
     });
 
     it("includes related events", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
-      const sendResult = await sendAgentMessage({
+      const sendResult = await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -304,16 +304,16 @@ describe("Debug Tools", () => {
 
   describe("debugReservations", () => {
     it("returns all active reservations", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
 
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent1",
         paths: ["src/a.ts"],
         reason: "Working on A",
       });
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent2",
         paths: ["src/b.ts"],
@@ -328,9 +328,9 @@ describe("Debug Tools", () => {
     });
 
     it("groups reservations by agent", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent1",
         paths: ["src/a.ts", "src/b.ts", "src/c.ts"],
@@ -343,9 +343,9 @@ describe("Debug Tools", () => {
     });
 
     it("includes expiration info", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent1",
         paths: ["src/a.ts"],
@@ -360,11 +360,11 @@ describe("Debug Tools", () => {
     });
 
     it("detects potential conflicts", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await initAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
 
       // Agent1 reserves src/**
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent1",
         paths: ["src/**"],
@@ -372,7 +372,7 @@ describe("Debug Tools", () => {
       });
 
       // Agent2 forces reservation of src/specific.ts (to test conflict detection)
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent2",
         paths: ["src/specific.ts"],
@@ -396,8 +396,8 @@ describe("Debug Tools", () => {
 
   describe("getEventTimeline", () => {
     it("returns events formatted for timeline display", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await sendAgentMessage({
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
@@ -420,7 +420,7 @@ describe("Debug Tools", () => {
     });
 
     it("filters by time range", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
       // Wait to ensure timestamp separation
       await new Promise((r) => setTimeout(r, 5));
@@ -429,7 +429,7 @@ describe("Debug Tools", () => {
       // Wait a bit more
       await new Promise((r) => setTimeout(r, 5));
 
-      await initAgent({ projectPath, agentName: "Agent2" });
+      await initSwarmAgent({ projectPath, agentName: "Agent2" });
 
       const result = await getEventTimeline({
         projectPath,
@@ -448,15 +448,15 @@ describe("Debug Tools", () => {
 
   describe("inspectState", () => {
     it("returns complete state snapshot", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
-      await sendAgentMessage({
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
+      await sendSwarmMessage({
         projectPath,
         fromAgent: "Agent1",
         toAgents: ["Agent2"],
         subject: "Test",
         body: "Hello",
       });
-      await reserveAgentFiles({
+      await reserveSwarmFiles({
         projectPath,
         agentName: "Agent1",
         paths: ["src/a.ts"],
@@ -476,7 +476,7 @@ describe("Debug Tools", () => {
     });
 
     it("includes database stats", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
       const result = await inspectState({ projectPath });
 
@@ -488,7 +488,7 @@ describe("Debug Tools", () => {
     });
 
     it("can export as JSON string", async () => {
-      await initAgent({ projectPath, agentName: "Agent1" });
+      await initSwarmAgent({ projectPath, agentName: "Agent1" });
 
       const result = await inspectState({ projectPath, format: "json" });
 

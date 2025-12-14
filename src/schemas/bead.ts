@@ -36,8 +36,8 @@ export type BeadDependency = z.infer<typeof BeadDependencySchema>;
  * Core bead schema - validates bd CLI JSON output
  *
  * ID format:
- * - Standard: `{project}-{hash}` (e.g., `opencode-swarm-plugin-1i8`)
- * - Subtask: `{project}-{hash}.{index}` (e.g., `opencode-swarm-plugin-1i8.1`)
+ * - Standard: `{project}-{hash}` (e.g., `opencode-hive-plugin-1i8`)
+ * - Subtask: `{project}-{hash}.{index}` (e.g., `opencode-hive-plugin-1i8.1`)
  * - Custom: `{project}-{custom-id}` (e.g., `migrate-egghead-phase-0`)
  * - Custom subtask: `{project}-{custom-id}.{suffix}` (e.g., `migrate-egghead-phase-0.e2e-test`)
  */
@@ -147,7 +147,7 @@ export const SubtaskSpecSchema = z.object({
 export type SubtaskSpec = z.infer<typeof SubtaskSpecSchema>;
 
 /**
- * Bead tree for swarm decomposition
+ * Bead tree for hive decomposition
  *
  * Represents an epic with its subtasks, ready for spawning agents.
  */

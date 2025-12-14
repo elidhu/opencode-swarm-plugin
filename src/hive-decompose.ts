@@ -1,5 +1,5 @@
 /**
- * Swarm Decompose Module - Task decomposition and validation
+ * Hive Decompose Module - Task decomposition and validation
  *
  * Handles breaking tasks into parallelizable subtasks with file assignments,
  * validates decomposition structure, and detects conflicts.
@@ -20,144 +20,14 @@ import {
   NEGATIVE_MARKERS,
   type DecompositionStrategy,
 } from "./hive-strategies";
+import {
+  DECOMPOSITION_PROMPT,
+  STRATEGY_DECOMPOSITION_PROMPT,
+} from "./hive-prompts";
 
 // ============================================================================
-// Decomposition Prompt (temporary - will be moved to hive-prompts.ts)
+// Prompts imported from hive-prompts.ts (canonical location)
 // ============================================================================
-
-/**
- * Prompt for decomposing a task into parallelizable subtasks.
- *
- * Used by hive_decompose to instruct the agent on how to break down work.
- * The agent responds with a BeadTree that gets validated.
- */
-const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a hive of agents.
-
-## Task
-{task}
-
-{context_section}
-
-## MANDATORY: Beads Issue Tracking
-
-**Every subtask MUST become a bead.** This is non-negotiable.
-
-After decomposition, the coordinator will:
-1. Create an epic bead for the overall task
-2. Create child beads for each subtask
-3. Track progress through bead status updates
-4. Close beads with summaries when complete
-
-Agents MUST update their bead status as they work. No silent progress.
-
-## Requirements
-
-1. **Break into 2-{max_subtasks} independent subtasks** that can run in parallel
-2. **Assign files** - each subtask must specify which files it will modify
-3. **No file overlap** - files cannot appear in multiple subtasks (they get exclusive locks)
-4. **Order by dependency** - if subtask B needs subtask A's output, A must come first in the array
-5. **Estimate complexity** - 1 (trivial) to 5 (complex)
-6. **Plan aggressively** - break down more than you think necessary, smaller is better
-
-## Response Format
-
-Respond with a JSON object matching this schema:
-
-\`\`\`typescript
-{
-  epic: {
-    title: string,        // Epic title for the beads tracker
-    description?: string  // Brief description of the overall goal
-  },
-  subtasks: [
-    {
-      title: string,              // What this subtask accomplishes
-      description?: string,       // Detailed instructions for the agent
-      files: string[],            // Files this subtask will modify (globs allowed)
-      dependencies: number[],     // Indices of subtasks this depends on (0-indexed)
-      estimated_complexity: 1-5   // Effort estimate
-    },
-    // ... more subtasks
-  ]
-}
-\`\`\`
-
-## Guidelines
-
-- **Plan aggressively** - when in doubt, split further. 3 small tasks > 1 medium task
-- **Prefer smaller, focused subtasks** over large complex ones
-- **Include test files** in the same subtask as the code they test
-- **Consider shared types** - if multiple files share types, handle that first
-- **Think about imports** - changes to exported APIs affect downstream files
-- **Explicit > implicit** - spell out what each subtask should do, don't assume
-
-## File Assignment Examples
-
-- Schema change: \`["src/schemas/user.ts", "src/schemas/index.ts"]\`
-- Component + test: \`["src/components/Button.tsx", "src/components/Button.test.tsx"]\`
-- API route: \`["src/app/api/users/route.ts"]\`
-
-Now decompose the task:`;
-
-/**
- * Strategy-specific decomposition prompt template
- */
-const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a hive of agents.
-
-## Task
-{task}
-
-{strategy_guidelines}
-
-{context_section}
-
-{skills_context}
-
-## MANDATORY: Beads Issue Tracking
-
-**Every subtask MUST become a bead.** This is non-negotiable.
-
-After decomposition, the coordinator will:
-1. Create an epic bead for the overall task
-2. Create child beads for each subtask
-3. Track progress through bead status updates
-4. Close beads with summaries when complete
-
-Agents MUST update their bead status as they work. No silent progress.
-
-## Requirements
-
-1. **Break into 2-{max_subtasks} independent subtasks** that can run in parallel
-2. **Assign files** - each subtask must specify which files it will modify
-3. **No file overlap** - files cannot appear in multiple subtasks (they get exclusive locks)
-4. **Order by dependency** - if subtask B needs subtask A's output, A must come first in the array
-5. **Estimate complexity** - 1 (trivial) to 5 (complex)
-6. **Plan aggressively** - break down more than you think necessary, smaller is better
-
-## Response Format
-
-Respond with a JSON object matching this schema:
-
-\`\`\`typescript
-{
-  epic: {
-    title: string,        // Epic title for the beads tracker
-    description?: string  // Brief description of the overall goal
-  },
-  subtasks: [
-    {
-      title: string,              // What this subtask accomplishes
-      description?: string,       // Detailed instructions for the agent
-      files: string[],            // Files this subtask will modify (globs allowed)
-      dependencies: number[],     // Indices of subtasks this depends on (0-indexed)
-      estimated_complexity: 1-5   // Effort estimate
-    },
-    // ... more subtasks
-  ]
-}
-\`\`\`
-
-Now decompose the task:`;
 
 // ============================================================================
 // Conflict Detection
@@ -379,7 +249,7 @@ export const hive_decompose = tool({
 /**
  * Validate a decomposition response from an agent
  *
- * Use this after the agent responds to swarm:decompose to validate the structure.
+ * Use this after the agent responds to hive:decompose to validate the structure.
  */
 export const hive_validate_decomposition = tool({
   description: "Validate a decomposition response against BeadTreeSchema",

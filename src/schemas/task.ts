@@ -2,7 +2,7 @@
  * Task decomposition schemas
  *
  * These schemas define the structure for breaking down tasks
- * into parallelizable subtasks for swarm execution.
+ * into parallelizable subtasks for hive execution.
  */
 import { z } from "zod";
 
@@ -109,12 +109,12 @@ export const SpawnedAgentSchema = z.object({
 export type SpawnedAgent = z.infer<typeof SpawnedAgentSchema>;
 
 /**
- * Result of spawning a swarm
+ * Result of spawning a hive
  */
 export const SwarmSpawnResultSchema = z.object({
   epic_id: z.string(),
   coordinator_name: z.string(), // Agent Mail name of coordinator
-  thread_id: z.string(), // Agent Mail thread for this swarm
+  thread_id: z.string(), // Agent Mail thread for this hive
   agents: z.array(SpawnedAgentSchema),
   started_at: z.string().datetime({ offset: true }), // ISO-8601 with timezone
 });

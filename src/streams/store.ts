@@ -76,32 +76,59 @@ export async function appendEvent(
     timestamp,
   });
 
-  // Insert event
-  const result = await db.query<{ id: number; sequence: number }>(
-    `INSERT INTO events (type, project_key, timestamp, data)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, sequence`,
-    [type, project_key, timestamp, JSON.stringify(rest)],
-  );
+  await db.exec("BEGIN");
+  try {
+    // Insert event
+    const result = await db.query<{ id: number; sequence: number }>(
+      `INSERT INTO events (type, project_key, timestamp, data)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, sequence`,
+      [type, project_key, timestamp, JSON.stringify(rest)],
+    );
 
-  const row = result.rows[0];
-  if (!row) {
-    throw new Error("Failed to insert event - no row returned");
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("Failed to insert event - no row returned");
+    }
+    const { id, sequence } = row;
+
+    console.log("[HiveMail] Event appended", {
+      type,
+      id,
+      sequence,
+      projectKey: project_key,
+    });
+
+    // Update materialized views based on event type
+    console.debug("[HiveMail] Updating materialized views", { type, id });
+    await updateMaterializedViews(db, { ...event, id, sequence });
+
+    await db.exec("COMMIT");
+
+    return { ...event, id, sequence };
+  } catch (e) {
+    // FIX: Propagate rollback failures to prevent silent data corruption
+    let rollbackError: unknown = null;
+    try {
+      await db.exec("ROLLBACK");
+    } catch (rbErr) {
+      rollbackError = rbErr;
+      console.error("[HiveMail] ROLLBACK failed:", rbErr);
+    }
+
+    if (rollbackError) {
+      // Throw composite error so caller knows both failures
+      const compositeError = new Error(
+        `Transaction failed: ${e instanceof Error ? e.message : String(e)}. ` +
+          `ROLLBACK also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}. ` +
+          `Database may be in inconsistent state.`,
+      );
+      (compositeError as any).originalError = e;
+      (compositeError as any).rollbackError = rollbackError;
+      throw compositeError;
+    }
+    throw e;
   }
-  const { id, sequence } = row;
-
-  console.log("[HiveMail] Event appended", {
-    type,
-    id,
-    sequence,
-    projectKey: project_key,
-  });
-
-  // Update materialized views based on event type
-  console.debug("[HiveMail] Updating materialized views", { type, id });
-  await updateMaterializedViews(db, { ...event, id, sequence });
-
-  return { ...event, id, sequence };
 }
 
 /**

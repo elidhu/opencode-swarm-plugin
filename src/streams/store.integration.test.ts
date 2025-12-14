@@ -91,6 +91,46 @@ describe("Event Store", () => {
       expect(agents.rows[0]?.name).toBe("TestAgent");
       expect(agents.rows[0]?.task_description).toBe("Testing the event store");
     });
+
+    it("should rollback transaction if materialized view update fails", async () => {
+      // First, drop the agents table to simulate a view update failure
+      const db = await getDatabase(TEST_PROJECT_PATH);
+      await db.exec("DROP TABLE agents");
+
+      const event = createEvent("agent_registered", {
+        project_key: "test-project",
+        agent_name: "TestAgent",
+        program: "opencode",
+        model: "claude-sonnet-4",
+        task_description: "Testing rollback",
+      });
+
+      // appendEvent should fail because the agents table doesn't exist
+      await expect(appendEvent(event, TEST_PROJECT_PATH)).rejects.toThrow();
+
+      // Recreate the agents table for subsequent checks
+      await db.exec(`
+        CREATE TABLE agents (
+          id SERIAL PRIMARY KEY,
+          project_key TEXT NOT NULL,
+          name TEXT NOT NULL,
+          program TEXT NOT NULL,
+          model TEXT NOT NULL,
+          task_description TEXT,
+          registered_at BIGINT NOT NULL,
+          last_active_at BIGINT NOT NULL,
+          UNIQUE(project_key, name)
+        )
+      `);
+
+      // Verify the event was NOT persisted (transaction was rolled back)
+      const events = await readEvents(
+        { projectKey: "test-project" },
+        TEST_PROJECT_PATH,
+      );
+
+      expect(events.length).toBe(0);
+    });
   });
 
   describe("appendEvents (batch)", () => {

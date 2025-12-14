@@ -1,5 +1,5 @@
 /**
- * Swarm Orchestrate Module - Status tracking and completion handling
+ * Hive Orchestrate Module - Status tracking and completion handling
  *
  * Handles hive execution lifecycle:
  * - Initialization and tool availability
@@ -78,7 +78,7 @@ async function queryEpicSubtasks(epicId: string): Promise<Bead[]> {
   const beadsAvailable = await isToolAvailable("beads");
   if (!beadsAvailable) {
     warnMissingTool("beads");
-    return []; // Return empty - swarm can still function without status tracking
+    return []; // Return empty - hive can still function without status tracking
   }
 
   const result = await Bun.$`bd list --parent ${epicId} --json`
@@ -114,7 +114,7 @@ async function queryEpicSubtasks(epicId: string): Promise<Bead[]> {
 }
 
 /**
- * Query Agent Mail for swarm thread messages
+ * Query Agent Mail for hive thread messages
  */
 async function querySwarmMessages(
   projectKey: string,
@@ -429,7 +429,7 @@ const globalStrikeStorage: StrikeStorage = new InMemoryStrikeStorage();
 // ============================================================================
 
 /**
- * Initialize swarm and check tool availability
+ * Initialize hive and check tool availability
  *
  * Call this at the start of a hive session to see what tools are available,
  * what skills exist in the project, and what features will be degraded.
@@ -576,7 +576,7 @@ export const hive_status = tool({
           statusCounts.completed++;
           break;
         case "blocked":
-          agentStatus = "pending"; // Blocked treated as pending for swarm
+          agentStatus = "pending"; // Blocked treated as pending for hive
           statusCounts.blocked++;
           break;
         default:
@@ -1457,7 +1457,7 @@ export const hive_check_strikes = tool({
  * knowledge discovered during task execution and codify them into reusable
  * skills for future hives.
  *
- * Implements the "learning swarm" pattern where swarms get smarter over time.
+ * Implements the "learning hive" pattern where hives get smarter over time.
  */
 export const hive_learn = tool({
   description: `Analyze completed work and optionally create a skill from learned patterns.

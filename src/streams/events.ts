@@ -1,5 +1,5 @@
 /**
- * Event Types for Swarm Mail Event Sourcing
+ * Event Types for Hive Mail Event Sourcing
  *
  * All agent coordination operations are represented as immutable events.
  * Current state is computed by replaying events (projections).
@@ -106,7 +106,7 @@ export const FileReleasedEventSchema = BaseEventSchema.extend({
 });
 
 // ============================================================================
-// Task Events (for swarm integration)
+// Task Events (for hive integration)
 // ============================================================================
 
 export const TaskStartedEventSchema = BaseEventSchema.extend({
@@ -179,7 +179,7 @@ export type TaskBlockedEvent = z.infer<typeof TaskBlockedEventSchema>;
 // ============================================================================
 
 /**
- * Shared session state for Agent Mail and Swarm Mail
+ * Shared session state for Agent Mail and Hive Mail
  *
  * Common fields for tracking agent coordination session across both
  * the MCP-based implementation (agent-mail) and the embedded event-sourced

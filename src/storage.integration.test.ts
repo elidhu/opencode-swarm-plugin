@@ -16,7 +16,7 @@ import {
   createStorageWithFallback,
 } from "./storage";
 import type { FeedbackEvent } from "./learning";
-import type { DecompositionPattern } from "./anti-patterns";
+import type { DecompositionPattern } from "./pattern-maturity";
 import type { PatternMaturity, MaturityFeedback } from "./pattern-maturity";
 
 // Use unique collection names to avoid conflicts with other tests

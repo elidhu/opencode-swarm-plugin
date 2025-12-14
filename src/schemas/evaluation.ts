@@ -114,7 +114,7 @@ export const WeightedEvaluationSchema = z.object({
 export type WeightedEvaluation = z.infer<typeof WeightedEvaluationSchema>;
 
 /**
- * Aggregated evaluation results for a swarm
+ * Aggregated evaluation results for a hive
  */
 export const SwarmEvaluationResultSchema = z.object({
   epic_id: z.string(),

@@ -31,10 +31,10 @@
  */
 
 import type { FeedbackEvent } from "./learning";
-import type { DecompositionPattern } from "./anti-patterns";
+import type { DecompositionPattern } from "./pattern-maturity";
 import type { PatternMaturity, MaturityFeedback } from "./pattern-maturity";
 import { InMemoryFeedbackStorage } from "./learning";
-import { InMemoryPatternStorage } from "./anti-patterns";
+import { InMemoryPatternStorage } from "./pattern-maturity";
 import { InMemoryMaturityStorage } from "./pattern-maturity";
 
 // ============================================================================

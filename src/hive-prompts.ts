@@ -1,7 +1,7 @@
 /**
- * Swarm Prompts Module - Prompt templates and generation
+ * Hive Prompts Module - Prompt templates and generation
  *
- * Provides all prompt templates used for swarm coordination:
+ * Provides all prompt templates used for hive coordination:
  * - Decomposition prompts (basic and strategy-specific)
  * - Subtask agent prompts (V1 and V2)
  * - Evaluation prompts
