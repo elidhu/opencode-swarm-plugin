@@ -569,7 +569,7 @@ process.on("SIGTERM", () => {
 // ============================================================================
 
 export { PGlite };
-export * from "./agent-mail";
+export * from "./mail-core";
 export * from "./debug";
 export * from "./events";
 export * from "./migrations";

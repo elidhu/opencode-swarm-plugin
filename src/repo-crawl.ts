@@ -151,7 +151,7 @@ async function githubFetch<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github.v3+json",
-    "User-Agent": "opencode-swarm-plugin",
+    "User-Agent": "opencode-hive-plugin",
     ...((options.headers as Record<string, string>) || {}),
   };
 

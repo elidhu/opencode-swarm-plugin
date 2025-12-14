@@ -31,7 +31,7 @@ import {
  * Used by hive_decompose to instruct the agent on how to break down work.
  * The agent responds with a BeadTree that gets validated.
  */
-const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a swarm of agents.
+const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a hive of agents.
 
 ## Task
 {task}
@@ -102,7 +102,7 @@ Now decompose the task:`;
 /**
  * Strategy-specific decomposition prompt template
  */
-const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a swarm of agents.
+const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a hive of agents.
 
 ## Task
 {task}

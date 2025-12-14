@@ -1,7 +1,7 @@
 /**
  * Swarm Orchestrate Module - Status tracking and completion handling
  *
- * Handles swarm execution lifecycle:
+ * Handles hive execution lifecycle:
  * - Initialization and tool availability
  * - Status tracking and progress reporting
  * - Completion verification and gates
@@ -143,7 +143,7 @@ async function querySwarmMessages(
   } catch (error) {
     // Thread might not exist yet, or query failed
     console.warn(
-      `[hive] Failed to query swarm messages for thread ${threadId}:`,
+      `[hive] Failed to query hive messages for thread ${threadId}:`,
       error,
     );
     return 0;
@@ -415,7 +415,7 @@ function classifyFailure(error: Error | string): string {
  * Global error accumulator for tracking errors across subtasks
  *
  * This is a session-level singleton that accumulates errors during
- * swarm execution for feeding into retry prompts.
+ * hive execution for feeding into retry prompts.
  */
 const globalErrorAccumulator = new ErrorAccumulator();
 
@@ -431,7 +431,7 @@ const globalStrikeStorage: StrikeStorage = new InMemoryStrikeStorage();
 /**
  * Initialize swarm and check tool availability
  *
- * Call this at the start of a swarm session to see what tools are available,
+ * Call this at the start of a hive session to see what tools are available,
  * what skills exist in the project, and what features will be degraded.
  *
  * Skills are automatically discovered from:
@@ -441,7 +441,7 @@ const globalStrikeStorage: StrikeStorage = new InMemoryStrikeStorage();
  */
 export const hive_init = tool({
   description:
-    "Initialize swarm session: discovers available skills, checks tool availability. ALWAYS call at swarm start.",
+    "Initialize hive session: discovers available skills, checks tool availability. ALWAYS call at hive start.",
   args: {
     project_path: tool.schema
       .string()
@@ -524,9 +524,9 @@ export const hive_init = tool({
           beads: beadsAvailable
             ? "✓ Use beads for all task tracking"
             : "Install beads: npm i -g @joelhooks/beads",
-          agent_mail: hiveMailAvailable
-            ? "✓ Use Agent Mail for coordination"
-            : "Start Agent Mail: agent-mail serve",
+          hive_mail: hiveMailAvailable
+            ? "✓ Hive Mail ready for coordination"
+            : "Hive Mail will auto-initialize on first use",
         },
         report,
       },
@@ -537,12 +537,12 @@ export const hive_init = tool({
 });
 
 /**
- * Get status of a swarm by epic ID
+ * Get status of a hive by epic ID
  *
  * Requires project_key to query Agent Mail for message counts.
  */
 export const hive_status = tool({
-  description: "Get status of a swarm by epic ID",
+  description: "Get status of a hive by epic ID",
   args: {
     epic_id: tool.schema.string().describe("Epic bead ID (e.g., bd-abc123)"),
     project_key: tool.schema
@@ -981,7 +981,7 @@ Did you learn anything reusable during this subtask? Consider:
 3. **Best Practices**: Domain-specific guidelines worth documenting?
 4. **Tool Usage**: Effective ways to use tools for this type of task?
 
-If you discovered something valuable, use \`hive_learn\` or \`skills_create\` to preserve it as a skill for future swarms.
+If you discovered something valuable, use \`hive_learn\` or \`skills_create\` to preserve it as a skill for future hives.
 
 Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
       // Add semantic-memory integration on success
@@ -1455,7 +1455,7 @@ export const hive_check_strikes = tool({
  *
  * This tool helps agents reflect on patterns, best practices, or domain
  * knowledge discovered during task execution and codify them into reusable
- * skills for future swarms.
+ * skills for future hives.
  *
  * Implements the "learning swarm" pattern where swarms get smarter over time.
  */
@@ -1554,7 +1554,7 @@ ${args.example ? `## Example\n\n\`\`\`\n${args.example}\n\`\`\`\n` : ""}
 ${args.files_context && args.files_context.length > 0 ? `## Reference Files\n\n${args.files_context.map((f) => `- \`${f}\``).join("\n")}\n` : ""}
 
 ---
-*Learned from swarm execution on ${new Date().toISOString().split("T")[0]}*`;
+*Learned from hive execution on ${new Date().toISOString().split("T")[0]}*`;
 
       // Import skills_create functionality
       const { getSkill, invalidateSkillsCache } = await import("./skills");

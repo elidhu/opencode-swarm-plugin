@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetDatabase } from "./index";
-import { initAgent, sendAgentMessage, reserveAgentFiles } from "./agent-mail";
+import { initAgent, sendAgentMessage, reserveAgentFiles } from "./mail-core";
 import {
   debugEvents,
   debugAgent,

@@ -24,7 +24,7 @@ import { tool } from "@opencode-ai/plugin";
  * Used by hive_decompose to instruct the agent on how to break down work.
  * The agent responds with a BeadTree that gets validated.
  */
-export const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a swarm of agents.
+export const DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a hive of agents.
 
 ## Task
 {task}
@@ -95,7 +95,7 @@ Now decompose the task:`;
 /**
  * Strategy-specific decomposition prompt template
  */
-export const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a swarm of agents.
+export const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into parallelizable subtasks for a hive of agents.
 
 ## Task
 {task}
@@ -103,8 +103,6 @@ export const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into pa
 {strategy_guidelines}
 
 {context_section}
-
-{cass_history}
 
 {skills_context}
 
@@ -160,7 +158,7 @@ Now decompose the task:`;
  * Each agent receives this prompt with their specific subtask details filled in.
  * The prompt establishes context, constraints, and expectations.
  */
-export const SUBTASK_PROMPT = `You are a swarm agent working on a subtask of a larger epic.
+export const SUBTASK_PROMPT = `You are a hive agent working on a subtask of a larger epic.
 
 ## Your Identity
 - **Agent Name**: {agent_name}
@@ -191,7 +189,7 @@ You MUST keep your bead updated as you work:
 3. **When done**: Use \`hive_complete\` - it closes your bead automatically
 4. **Discovered issues**: Create new beads with \`bd create "issue" -t bug\`
 
-**Never work silently.** Your bead status is how the swarm tracks progress.
+**Never work silently.** Your bead status is how the hive tracks progress.
 
 ## MANDATORY: Swarm Mail Communication
 
@@ -250,7 +248,7 @@ Begin work on your subtask now.`;
  *
  * Supports {error_context} placeholder for retry prompts.
  */
-export const SUBTASK_PROMPT_V2 = `You are a swarm agent working on: **{subtask_title}**
+export const SUBTASK_PROMPT_V2 = `You are a hive agent working on: **{subtask_title}**
 
 ## [IDENTITY]
 Agent: (assigned at spawn)
@@ -337,7 +335,7 @@ As you work, note reusable patterns, best practices, or domain insights:
 - If you discover something that would help future agents, consider creating a skill
 - Use skills_create to codify patterns for the project
 - Good skills have clear "when to use" descriptions with actionable instructions
-- Skills make swarms smarter over time
+- Skills make hives smarter over time
 
 ## [WORKFLOW]
 1. **hivemail_init** - Initialize session FIRST
@@ -610,7 +608,7 @@ export const hive_evaluation_prompt = tool({
  */
 export const hive_plan_prompt = tool({
   description:
-    "Generate strategy-specific decomposition prompt. Auto-selects strategy or uses provided one. Queries CASS for similar tasks.",
+    "Generate strategy-specific decomposition prompt. Auto-selects strategy or uses provided one.",
   args: {
     task: tool.schema.string().min(1).describe("Task description to decompose"),
     strategy: tool.schema
@@ -628,17 +626,6 @@ export const hive_plan_prompt = tool({
       .string()
       .optional()
       .describe("Additional context (codebase info, constraints, etc.)"),
-    query_cass: tool.schema
-      .boolean()
-      .optional()
-      .describe("Query CASS for similar past tasks (default: true)"),
-    cass_limit: tool.schema
-      .number()
-      .int()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe("Max CASS results to include (default: 3)"),
     include_skills: tool.schema
       .boolean()
       .optional()
@@ -703,11 +690,9 @@ export const hive_plan_prompt = tool({
       ? `## Additional Context\n${args.context}`
       : "## Additional Context\n(none provided)";
 
-    // Build the prompt (without CASS - we'll let the module handle that)
     const prompt = STRATEGY_DECOMPOSITION_PROMPT.replace("{task}", args.task)
       .replace("{strategy_guidelines}", strategyGuidelines)
       .replace("{context_section}", contextSection)
-      .replace("{cass_history}", "") // Empty for now
       .replace("{skills_context}", skillsContext || "")
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString());
 

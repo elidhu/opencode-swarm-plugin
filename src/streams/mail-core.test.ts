@@ -29,7 +29,7 @@ import {
   acknowledgeMessage,
   checkHealth,
   type AgentMailContext,
-} from "./agent-mail";
+} from "./mail-core";
 
 let TEST_PROJECT_PATH: string;
 
@@ -37,7 +37,7 @@ describe("Agent Mail Tools", () => {
   beforeEach(async () => {
     TEST_PROJECT_PATH = join(
       tmpdir(),
-      `agent-mail-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      `mail-core-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     );
     await mkdir(TEST_PROJECT_PATH, { recursive: true });
   });

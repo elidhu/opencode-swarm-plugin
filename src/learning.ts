@@ -1,7 +1,7 @@
 /**
  * Learning Module - Confidence decay, feedback scoring, and outcome tracking
  *
- * Implements patterns from cass-memory for learning from swarm outcomes:
+ * Implements patterns from cass-memory for learning from hive outcomes:
  * - Confidence decay: evaluation criteria weights fade unless revalidated
  * - Feedback events: track helpful/harmful signals from task outcomes
  * - Outcome scoring: implicit feedback from duration, errors, retries
@@ -985,7 +985,7 @@ export function formatMemoryStoreOnSuccess(
     information: `Task "${beadId}" completed successfully${strategyInfo}.
 Key insight: ${summary}
 Files touched: ${filesTouched.join(", ") || "none"}`,
-    metadata: `swarm, success, ${beadId}, ${strategy || "completion"}`,
+    metadata: `hive, success, ${beadId}, ${strategy || "completion"}`,
     instruction:
       "Store this successful completion in semantic-memory for future reference",
   };
@@ -1046,9 +1046,9 @@ export function formatMemoryQueryForDecomposition(
 }
 
 /**
- * Format memory validation hint when CASS history helped
+ * Format memory validation hint when past learnings helped
  *
- * @param beadId - Bead ID that benefited from CASS
+ * @param beadId - Bead ID that benefited from semantic memory
  * @returns Memory validation hint
  */
 export function formatMemoryValidationHint(beadId: string): {

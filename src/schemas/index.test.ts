@@ -143,7 +143,7 @@ describe("TaskDecompositionSchema", () => {
 });
 
 describe("SwarmStatusSchema", () => {
-  it("validates swarm status", () => {
+  it("validates hive status", () => {
     const status = {
       epic_id: "bd-epic123",
       total_agents: 3,

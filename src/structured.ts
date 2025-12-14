@@ -381,7 +381,7 @@ export const structured_validate = tool({
       .describe(
         "Schema to validate against: " +
           "evaluation = agent self-eval with criteria, " +
-          "task_decomposition = swarm task breakdown, " +
+          "task_decomposition = hive task breakdown, " +
           "bead_tree = epic with subtasks",
       ),
     max_retries: tool.schema

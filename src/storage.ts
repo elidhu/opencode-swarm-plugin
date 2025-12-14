@@ -6,9 +6,9 @@
  * - in-memory - For testing and ephemeral sessions
  *
  * The semantic-memory backend uses collections:
- * - `swarm-feedback` - Criterion feedback events
- * - `swarm-patterns` - Decomposition patterns and anti-patterns
- * - `swarm-maturity` - Pattern maturity tracking
+ * - `hive-feedback` - Criterion feedback events
+ * - `hive-patterns` - Decomposition patterns and anti-patterns
+ * - `hive-maturity` - Pattern maturity tracking
  *
  * @example
  * ```typescript
@@ -144,9 +144,9 @@ export interface StorageConfig {
 export const DEFAULT_STORAGE_CONFIG: StorageConfig = {
   backend: "semantic-memory",
   collections: {
-    feedback: "swarm-feedback",
-    patterns: "swarm-patterns",
-    maturity: "swarm-maturity",
+    feedback: "hive-feedback",
+    patterns: "hive-patterns",
+    maturity: "hive-maturity",
   },
   useSemanticSearch: true,
 };

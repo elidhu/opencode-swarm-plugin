@@ -892,7 +892,7 @@ describe("hive-mail integration (embedded)", () => {
       clearSessionState(worker2Ctx.sessionID);
     });
 
-    it("prevents file conflicts in swarm scenarios", async () => {
+    it("prevents file conflicts in hive scenarios", async () => {
       const worker1Ctx = createTestContext();
       const worker2Ctx = createTestContext();
 
@@ -908,8 +908,8 @@ describe("hive-mail integration (embedded)", () => {
         worker2Ctx,
       );
 
-      const path1 = "src/swarm/file1.ts";
-      const path2 = "src/swarm/file2.ts";
+      const path1 = "src/hive/file1.ts";
+      const path2 = "src/hive/file2.ts";
 
       // Worker 1 reserves file 1
       const res1 = await executeTool<{

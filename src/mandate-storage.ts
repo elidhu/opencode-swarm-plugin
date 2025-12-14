@@ -6,8 +6,8 @@
  * - in-memory - For testing and ephemeral sessions
  *
  * Collections:
- * - `swarm-mandates` - Mandate entry storage
- * - `swarm-votes` - Vote storage
+ * - `hive-mandates` - Mandate entry storage
+ * - `hive-votes` - Vote storage
  *
  * Score calculation uses 90-day half-life decay matching learning.ts patterns.
  *
@@ -165,8 +165,8 @@ export interface MandateStorageConfig {
 export const DEFAULT_MANDATE_STORAGE_CONFIG: MandateStorageConfig = {
   backend: "semantic-memory",
   collections: {
-    mandates: "swarm-mandates",
-    votes: "swarm-votes",
+    mandates: "hive-mandates",
+    votes: "hive-votes",
   },
   decay: DEFAULT_MANDATE_DECAY_CONFIG,
   useSemanticSearch: true,

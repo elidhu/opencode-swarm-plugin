@@ -911,38 +911,6 @@ describe("Swarm Tool Integrations", () => {
     });
   });
 
-  describe("hive_decompose with CASS integration", () => {
-    it("includes cass_history in response", async () => {
-      const result = await hive_decompose.execute(
-        {
-          task: "Add user authentication",
-          max_subtasks: 3,
-          query_cass: true,
-        },
-        mockContext,
-      );
-
-      const parsed = JSON.parse(result);
-
-      expect(parsed).toHaveProperty("cass_history");
-      expect(parsed.cass_history).toHaveProperty("queried");
-    });
-
-    it("skips CASS when disabled", async () => {
-      const result = await hive_decompose.execute(
-        {
-          task: "Add user authentication",
-          max_subtasks: 3,
-          query_cass: false,
-        },
-        mockContext,
-      );
-
-      const parsed = JSON.parse(result);
-
-      expect(parsed.cass_history.queried).toBe(false);
-    });
-  });
 });
 
 // ============================================================================

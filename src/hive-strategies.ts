@@ -227,7 +227,6 @@ export const STRATEGIES: Record<
       "Include a synthesis subtask that depends on all search subtasks",
       "Use pdf-brain for documentation/books if available",
       "Use repo-crawl for GitHub repos if URL provided",
-      "Use cass for past agent session history",
       "Assign NO files to research subtasks (read-only)",
     ],
     antiPatterns: [
@@ -236,8 +235,8 @@ export const STRATEGIES: Record<
       "Don't forget to check tool availability before assigning sources",
     ],
     examples: [
-      "Research auth patterns → [Search PDFs, Search repos, Search history, Synthesize]",
-      "Investigate error → [Search cass for similar errors, Search repo for error handling, Synthesize]",
+      "Research auth patterns → [Search PDFs, Search repos, Synthesize]",
+      "Investigate error → [Search repo for error handling, Check issues, Synthesize]",
       "Learn about library → [Search docs, Search examples, Search issues, Synthesize findings]",
     ],
   },

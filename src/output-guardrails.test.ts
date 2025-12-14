@@ -230,8 +230,8 @@ describe("guardrailOutput", () => {
     const result1 = guardrailOutput("repo-autopsy_file", mediumOutput);
     expect(result1.truncated).toBe(false);
 
-    // cass_stats has 8000 char limit
-    const result2 = guardrailOutput("cass_stats", mediumOutput);
+    // skills_read has 8000 char limit
+    const result2 = guardrailOutput("skills_read", mediumOutput);
     expect(result2.truncated).toBe(true);
   });
 
@@ -282,7 +282,7 @@ describe("guardrailOutput", () => {
     // Test a sample of skip tools
     const samplesToTest = [
       "beads_create",
-      "agentmail_send",
+      "hivemail_send",
       "hivemail_inbox",
       "structured_validate",
       "hive_complete",
@@ -346,13 +346,12 @@ describe("DEFAULT_GUARDRAIL_CONFIG", () => {
 
     expect(config.toolLimits["repo-autopsy_file"]).toBe(64000);
     expect(config.toolLimits["context7_get-library-docs"]).toBe(64000);
-    expect(config.toolLimits["cass_view"]).toBe(64000);
+    expect(config.toolLimits["skills_read"]).toBe(48000);
   });
 
   test("includes lower limits for stats tools", () => {
     const config = DEFAULT_GUARDRAIL_CONFIG;
 
-    expect(config.toolLimits["cass_stats"]).toBe(8000);
     expect(config.toolLimits["repo-autopsy_stats"]).toBe(16000);
   });
 
@@ -363,7 +362,7 @@ describe("DEFAULT_GUARDRAIL_CONFIG", () => {
     const expectedSkips = [
       "beads_create",
       "beads_sync",
-      "agentmail_init",
+      "hivemail_init",
       "hivemail_send",
       "structured_parse_evaluation",
       "hive_decompose",

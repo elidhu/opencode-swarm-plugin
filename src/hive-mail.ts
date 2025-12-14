@@ -114,7 +114,7 @@ const MAX_INBOX_LIMIT = 5; // HARD CAP - context preservation
  * This is set by the plugin init to the actual working directory (from OpenCode).
  * Without this, tools might use the plugin's directory instead of the project's.
  */
-let swarmMailProjectDirectory: string | null = null;
+let hiveMailProjectDirectory: string | null = null;
 
 /**
  * Set the default project directory for Swarm Mail operations
@@ -122,7 +122,7 @@ let swarmMailProjectDirectory: string | null = null;
  * Called during plugin initialization with the actual project directory.
  */
 export function setHiveMailProjectDirectory(directory: string): void {
-  swarmMailProjectDirectory = directory;
+  hiveMailProjectDirectory = directory;
 }
 
 /**
@@ -130,7 +130,7 @@ export function setHiveMailProjectDirectory(directory: string): void {
  * Returns undefined if not set - let getDatabasePath use global fallback
  */
 export function getHiveMailProjectDirectory(): string | undefined {
-  return swarmMailProjectDirectory ?? undefined;
+  return hiveMailProjectDirectory ?? undefined;
 }
 
 // ============================================================================
@@ -269,7 +269,7 @@ export const hivemail_init = tool({
  * Send message to other agents
  */
 export const hivemail_send = tool({
-  description: "Send message to other swarm agents",
+  description: "Send message to other hive agents",
   args: {
     to: tool.schema
       .array(tool.schema.string())
