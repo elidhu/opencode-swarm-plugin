@@ -5,7 +5,6 @@
  * Tools are checked once and cached for the session.
  *
  * Supported tools:
- * - semantic-memory: Learning persistence with semantic search
  * - beads (bd): Git-backed issue tracking
  * - hive-mail: Embedded multi-agent coordination (PGLite-based)
  */
@@ -14,7 +13,7 @@ import { checkHiveHealth } from "./streams/hive-mail";
 
 const BUNX_TIMEOUT_MS = 10000;
 
-export type ToolName = "semantic-memory" | "beads" | "hive-mail";
+export type ToolName = "beads" | "hive-mail";
 
 export interface ToolStatus {
   available: boolean;
@@ -42,49 +41,6 @@ async function commandExists(cmd: string): Promise<boolean> {
 }
 
 const toolCheckers: Record<ToolName, () => Promise<ToolStatus>> = {
-  "semantic-memory": async () => {
-    const nativeExists = await commandExists("semantic-memory");
-    if (nativeExists) {
-      try {
-        const result = await Bun.$`semantic-memory stats`.quiet().nothrow();
-        return {
-          available: result.exitCode === 0,
-          checkedAt: new Date().toISOString(),
-          version: "native",
-        };
-      } catch (e) {
-        return {
-          available: false,
-          checkedAt: new Date().toISOString(),
-          error: String(e),
-        };
-      }
-    }
-
-    try {
-      const proc = Bun.spawn(["bunx", "semantic-memory", "stats"], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-
-      const timeout = setTimeout(() => proc.kill(), BUNX_TIMEOUT_MS);
-      const exitCode = await proc.exited;
-      clearTimeout(timeout);
-
-      return {
-        available: exitCode === 0,
-        checkedAt: new Date().toISOString(),
-        version: "bunx",
-      };
-    } catch (e) {
-      return {
-        available: false,
-        checkedAt: new Date().toISOString(),
-        error: String(e),
-      };
-    }
-  },
-
   beads: async () => {
     const exists = await commandExists("bd");
     if (!exists) {
@@ -132,8 +88,6 @@ const toolCheckers: Record<ToolName, () => Promise<ToolStatus>> = {
 };
 
 const fallbackBehaviors: Record<ToolName, string> = {
-  "semantic-memory":
-    "Learning data stored in-memory only (lost on session end)",
   beads: "Hive cannot track issues - task coordination will be less reliable",
   "hive-mail":
     "Multi-agent coordination disabled - file conflicts possible if multiple agents active",
@@ -171,7 +125,7 @@ export async function getToolAvailability(
 export async function checkAllTools(): Promise<
   Map<ToolName, ToolAvailability>
 > {
-  const tools: ToolName[] = ["semantic-memory", "beads", "hive-mail"];
+  const tools: ToolName[] = ["beads", "hive-mail"];
 
   const results = new Map<ToolName, ToolAvailability>();
 

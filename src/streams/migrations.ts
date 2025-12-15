@@ -107,6 +107,22 @@ export const migrations: Migration[] = [
     `,
     down: `DROP TABLE IF EXISTS deferred;`,
   },
+  {
+    version: 3,
+    description: "Add locks table for DurableLock",
+    up: `
+      CREATE TABLE IF NOT EXISTS locks (
+        resource TEXT PRIMARY KEY,
+        holder TEXT NOT NULL,
+        seq INTEGER NOT NULL DEFAULT 0,
+        acquired_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_locks_expires ON locks(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_locks_holder ON locks(holder);
+    `,
+    down: `DROP TABLE IF EXISTS locks;`,
+  },
 ];
 
 // ============================================================================

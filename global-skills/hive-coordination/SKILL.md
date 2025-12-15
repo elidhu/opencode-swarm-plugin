@@ -22,7 +22,6 @@ tools:
   - hivemail_reserve
   - hivemail_release
   - hivemail_health
-  - semantic-memory_find
   - cass_search
   - pdf-brain_search
   - skills_list
@@ -124,11 +123,13 @@ await hivemail_init({
 
 ### Phase 2: Knowledge Gathering (MANDATORY)
 
-Before decomposing, query ALL knowledge sources:
+Before decomposing, query external knowledge sources and let semantic memory work automatically:
 
 ```typescript
-// 1. Past learnings from this project
-semantic_memory_find({ query: "<task keywords>", limit: 5 });
+// 1. Past learnings from this project (AUTOMATIC)
+// Semantic memory queries happen automatically during hive_plan_prompt
+// LanceDB queries .hive/vectors/patterns.lance for similar tasks
+// No manual semantic_memory_find calls needed
 
 // 2. How similar tasks were solved before
 cass_search({ query: "<task description>", limit: 5 });
@@ -140,7 +141,13 @@ pdf_brain_search({ query: "<domain concepts>", limit: 5 });
 skills_list();
 ```
 
-Synthesize findings into `shared_context` for workers.
+**Semantic Memory is ALWAYS Active:** The `hive_plan_prompt` tool automatically:
+- Queries LanceDB for similar past tasks
+- Includes proven patterns in context
+- Excludes anti-patterns (3-strike failures)
+- Returns `memory_queried: true, patterns_found: N` in response
+
+Synthesize external findings (CASS, PDF Brain) into `shared_context` for workers.
 
 ### Phase 3: Decomposition (DELEGATE TO SUBAGENT)
 
@@ -272,19 +279,32 @@ const message = await hivemail_read_message({ message_id: N });
 - Run final verification (typecheck, tests)
 - Close epic with summary
 - Release any remaining reservations
-- Record outcomes for learning
+- Record outcomes for learning (automatic)
 
 ```typescript
 await hive_complete({
   project_key: "$PWD",
   agent_name: "coordinator",
   bead_id: epic_id,
-  summary: "All subtasks complete",
+  summary: "All subtasks complete. Split by feature into 4 parallel tasks.",
   files_touched: [...],
 });
+// Tool automatically:
+// - Extracts patterns from summary ("Split by feature", "4 parallel tasks")
+// - Generates embeddings with Transformers.js
+// - Stores to LanceDB at .hive/vectors/patterns.lance
+// - Returns: { ...result, memory_stored: true }
+
 await hivemail_release(); // Release any remaining reservations
 await beads_sync();
 ```
+
+**Automatic Pattern Learning:** When workers call `hive_complete`:
+- Successful patterns automatically stored to semantic memory
+- Failed patterns tracked with failure counts
+- 3rd failure triggers automatic anti-pattern creation
+- Anti-patterns stored with `is_negative: true` flag
+- Future decompositions automatically exclude anti-patterns
 
 ## Decomposition Strategies
 
@@ -414,14 +434,15 @@ One blocker affects multiple subtasks.
 // 1. Initialize Hive Mail FIRST
 hivemail_init({ project_path: "$PWD", task_description: "..." });
 
-// 2. Gather knowledge
-semantic_memory_find({ query });
+// 2. Gather knowledge (semantic memory automatic)
+// NO semantic_memory_find needed - hive_plan_prompt queries automatically
 cass_search({ query });
 pdf_brain_search({ query });
 skills_list();
 
-// 3. Decompose
-hive_plan_prompt({ task });
+// 3. Decompose (queries semantic memory automatically)
+const plan = hive_plan_prompt({ task });
+// Returns: { ...prompt, memory_queried: true, patterns_found: 5 }
 hive_validate_decomposition();
 beads_create_epic();
 
@@ -436,10 +457,17 @@ hive_status();
 hivemail_inbox();
 hivemail_read_message({ message_id });
 
-// 7. Complete
-hive_complete();
+// 7. Complete (stores to semantic memory automatically)
+const result = hive_complete();
+// Returns: { ...result, memory_stored: true }
 hivemail_release();
 beads_sync();
+
+// Semantic memory operations:
+// - During step 3: Queries .hive/vectors/patterns.lance for similar tasks
+// - During step 7: Stores successful patterns with embeddings
+// - 3-strike failures: Auto-creates anti-patterns
+// - All via LanceDB + Transformers.js (bundled, no external deps)
 ```
 
 See `references/coordinator-patterns.md` for detailed patterns.

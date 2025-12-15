@@ -38,6 +38,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  createHiveTool,
+  loadSessionState,
+  saveSessionState,
+} from "./hive-tool-helpers";
 
 // ============================================================================
 // Types
@@ -145,33 +150,6 @@ function getSessionStatePath(sessionID: string): string {
   return join(SESSION_STATE_DIR, `${safeID}.json`);
 }
 
-function loadSessionState(sessionID: string): HiveMailState | null {
-  const path = getSessionStatePath(sessionID);
-  try {
-    if (existsSync(path)) {
-      const data = readFileSync(path, "utf-8");
-      return JSON.parse(data) as HiveMailState;
-    }
-  } catch (error) {
-    console.warn(`[hive-mail] Could not load session state: ${error}`);
-  }
-  return null;
-}
-
-function saveSessionState(sessionID: string, state: HiveMailState): boolean {
-  try {
-    if (!existsSync(SESSION_STATE_DIR)) {
-      mkdirSync(SESSION_STATE_DIR, { recursive: true });
-    }
-    const path = getSessionStatePath(sessionID);
-    writeFileSync(path, JSON.stringify(state, null, 2));
-    return true;
-  } catch (error) {
-    console.warn(`[hive-mail] Could not save session state: ${error}`);
-    return false;
-  }
-}
-
 export function clearSessionState(sessionID: string): void {
   const path = getSessionStatePath(sessionID);
   try {
@@ -268,9 +246,9 @@ export const hivemail_init = tool({
 /**
  * Send message to other agents
  */
-export const hivemail_send = tool({
-  description: "Send message to other hive agents",
-  args: {
+export const hivemail_send = createHiveTool<SendArgs>(
+  "Send message to other hive agents",
+  {
     to: tool.schema
       .array(tool.schema.string())
       .describe("List of recipient agent names"),
@@ -289,59 +267,37 @@ export const hivemail_send = tool({
       .optional()
       .describe("Whether acknowledgement is required"),
   },
-  async execute(args: SendArgs, ctx: ToolContext): Promise<string> {
-    const sessionID = ctx.sessionID || "default";
-    const state = loadSessionState(sessionID);
-
+  async (args, state) => {
     if (!state) {
-      return JSON.stringify(
-        { error: "Session not initialized. Call hivemail_init first." },
-        null,
-        2,
-      );
+      throw new Error("Session not initialized");
     }
 
-    try {
-      const result = await sendSwarmMessage({
-        projectPath: state.projectKey,
-        fromAgent: state.agentName,
-        toAgents: args.to,
-        subject: args.subject,
-        body: args.body,
-        threadId: args.thread_id,
-        importance: args.importance,
-        ackRequired: args.ack_required,
-      });
+    const result = await sendSwarmMessage({
+      projectPath: state.projectKey,
+      fromAgent: state.agentName,
+      toAgents: args.to,
+      subject: args.subject,
+      body: args.body,
+      threadId: args.thread_id,
+      importance: args.importance,
+      ackRequired: args.ack_required,
+    });
 
-      return JSON.stringify(
-        {
-          success: result.success,
-          message_id: result.messageId,
-          thread_id: result.threadId,
-          recipient_count: result.recipientCount,
-        },
-        null,
-        2,
-      );
-    } catch (error) {
-      return JSON.stringify(
-        {
-          error: `Failed to send message: ${error instanceof Error ? error.message : String(error)}`,
-        },
-        null,
-        2,
-      );
-    }
+    return {
+      success: result.success,
+      message_id: result.messageId,
+      thread_id: result.threadId,
+      recipient_count: result.recipientCount,
+    };
   },
-});
+);
 
 /**
  * Fetch inbox (CONTEXT-SAFE: bodies excluded, limit 5)
  */
-export const hivemail_inbox = tool({
-  description:
-    "Fetch inbox (CONTEXT-SAFE: bodies excluded by default, max 5 messages). Use hivemail_read_message for full body.",
-  args: {
+export const hivemail_inbox = createHiveTool<InboxArgs>(
+  "Fetch inbox (CONTEXT-SAFE: bodies excluded by default, max 5 messages). Use hivemail_read_message for full body.",
+  {
     limit: tool.schema
       .number()
       .max(MAX_INBOX_LIMIT)
@@ -352,124 +308,76 @@ export const hivemail_inbox = tool({
       .optional()
       .describe("Only fetch urgent messages"),
   },
-  async execute(args: InboxArgs, ctx: ToolContext): Promise<string> {
-    const sessionID = ctx.sessionID || "default";
-    const state = loadSessionState(sessionID);
-
+  async (args, state) => {
     if (!state) {
-      return JSON.stringify(
-        { error: "Session not initialized. Call hivemail_init first." },
-        null,
-        2,
-      );
+      throw new Error("Session not initialized");
     }
 
-    try {
-      const result = await getSwarmInbox({
-        projectPath: state.projectKey,
-        agentName: state.agentName,
-        limit: Math.min(args.limit || MAX_INBOX_LIMIT, MAX_INBOX_LIMIT),
-        urgentOnly: args.urgent_only,
-        includeBodies: false, // ALWAYS false for context preservation
-      });
+    const result = await getSwarmInbox({
+      projectPath: state.projectKey,
+      agentName: state.agentName,
+      limit: Math.min(args.limit || MAX_INBOX_LIMIT, MAX_INBOX_LIMIT),
+      urgentOnly: args.urgent_only,
+      includeBodies: false, // ALWAYS false for context preservation
+    });
 
-      return JSON.stringify(
-        {
-          messages: result.messages.map((m) => ({
-            id: m.id,
-            from: m.from_agent,
-            subject: m.subject,
-            thread_id: m.thread_id,
-            importance: m.importance,
-            timestamp: m.created_at,
-          })),
-          total: result.total,
-          note: "Use hivemail_read_message to fetch full body",
-        },
-        null,
-        2,
-      );
-    } catch (error) {
-      return JSON.stringify(
-        {
-          error: `Failed to fetch inbox: ${error instanceof Error ? error.message : String(error)}`,
-        },
-        null,
-        2,
-      );
-    }
+    return {
+      messages: result.messages.map((m) => ({
+        id: m.id,
+        from: m.from_agent,
+        subject: m.subject,
+        thread_id: m.thread_id,
+        importance: m.importance,
+        timestamp: m.created_at,
+      })),
+      total: result.total,
+      note: "Use hivemail_read_message to fetch full body",
+    };
   },
-});
+);
 
 /**
  * Fetch ONE message body by ID
  */
-export const hivemail_read_message = tool({
-  description:
-    "Fetch ONE message body by ID. Use for reading full message content.",
-  args: {
+export const hivemail_read_message = createHiveTool<ReadMessageArgs>(
+  "Fetch ONE message body by ID. Use for reading full message content.",
+  {
     message_id: tool.schema.number().describe("Message ID to read"),
   },
-  async execute(args: ReadMessageArgs, ctx: ToolContext): Promise<string> {
-    const sessionID = ctx.sessionID || "default";
-    const state = loadSessionState(sessionID);
-
+  async (args, state) => {
     if (!state) {
-      return JSON.stringify(
-        { error: "Session not initialized. Call hivemail_init first." },
-        null,
-        2,
-      );
+      throw new Error("Session not initialized");
     }
 
-    try {
-      const message = await readSwarmMessage({
-        projectPath: state.projectKey,
-        messageId: args.message_id,
-        agentName: state.agentName,
-        markAsRead: true,
-      });
+    const message = await readSwarmMessage({
+      projectPath: state.projectKey,
+      messageId: args.message_id,
+      agentName: state.agentName,
+      markAsRead: true,
+    });
 
-      if (!message) {
-        return JSON.stringify(
-          { error: `Message ${args.message_id} not found` },
-          null,
-          2,
-        );
-      }
-
-      return JSON.stringify(
-        {
-          id: message.id,
-          from: message.from_agent,
-          subject: message.subject,
-          body: message.body,
-          thread_id: message.thread_id,
-          importance: message.importance,
-          timestamp: message.created_at,
-        },
-        null,
-        2,
-      );
-    } catch (error) {
-      return JSON.stringify(
-        {
-          error: `Failed to read message: ${error instanceof Error ? error.message : String(error)}`,
-        },
-        null,
-        2,
-      );
+    if (!message) {
+      throw new Error(`Message ${args.message_id} not found`);
     }
+
+    return {
+      id: message.id,
+      from: message.from_agent,
+      subject: message.subject,
+      body: message.body,
+      thread_id: message.thread_id,
+      importance: message.importance,
+      timestamp: message.created_at,
+    };
   },
-});
+);
 
 /**
  * Reserve file paths for exclusive editing
  */
-export const hivemail_reserve = tool({
-  description:
-    "Reserve file paths for exclusive editing. Prevents conflicts with other agents.",
-  args: {
+export const hivemail_reserve = createHiveTool<ReserveArgs>(
+  "Reserve file paths for exclusive editing. Prevents conflicts with other agents.",
+  {
     paths: tool.schema
       .array(tool.schema.string())
       .describe("File paths or glob patterns to reserve"),
@@ -486,65 +394,41 @@ export const hivemail_reserve = tool({
       .optional()
       .describe("Time-to-live in seconds (default: 3600)"),
   },
-  async execute(args: ReserveArgs, ctx: ToolContext): Promise<string> {
-    const sessionID = ctx.sessionID || "default";
-    const state = loadSessionState(sessionID);
-
+  async (args, state, ctx) => {
     if (!state) {
-      return JSON.stringify(
-        { error: "Session not initialized. Call hivemail_init first." },
-        null,
-        2,
-      );
+      throw new Error("Session not initialized");
     }
 
-    try {
-      const result = await reserveSwarmFiles({
-        projectPath: state.projectKey,
-        agentName: state.agentName,
-        paths: args.paths,
-        reason: args.reason,
-        exclusive: args.exclusive ?? true,
-        ttlSeconds: args.ttl_seconds,
-      });
+    const result = await reserveSwarmFiles({
+      projectPath: state.projectKey,
+      agentName: state.agentName,
+      paths: args.paths,
+      reason: args.reason,
+      exclusive: args.exclusive ?? true,
+      ttlSeconds: args.ttl_seconds,
+    });
 
-      // Track reservations in session state
-      if (result.granted.length > 0) {
-        state.reservations.push(...result.granted.map((r) => r.id));
-        saveSessionState(sessionID, state);
-      }
-
-      if (result.conflicts.length > 0) {
-        return JSON.stringify(
-          {
-            granted: result.granted,
-            conflicts: result.conflicts,
-            warning: `${result.conflicts.length} path(s) already reserved by other agents`,
-          },
-          null,
-          2,
-        );
-      }
-
-      return JSON.stringify(
-        {
-          granted: result.granted,
-          message: `Reserved ${result.granted.length} path(s)`,
-        },
-        null,
-        2,
-      );
-    } catch (error) {
-      return JSON.stringify(
-        {
-          error: `Failed to reserve files: ${error instanceof Error ? error.message : String(error)}`,
-        },
-        null,
-        2,
-      );
+    // Track reservations in session state
+    if (result.granted.length > 0) {
+      state.reservations.push(...result.granted.map((r) => r.id));
+      const sessionID = ctx.sessionID || "default";
+      saveSessionState(sessionID, state);
     }
+
+    if (result.conflicts.length > 0) {
+      return {
+        granted: result.granted,
+        conflicts: result.conflicts,
+        warning: `${result.conflicts.length} path(s) already reserved by other agents`,
+      };
+    }
+
+    return {
+      granted: result.granted,
+      message: `Reserved ${result.granted.length} path(s)`,
+    };
   },
-});
+);
 
 /**
  * Release file reservations
@@ -631,50 +515,28 @@ export const hivemail_release = tool({
 /**
  * Acknowledge a message
  */
-export const hivemail_ack = tool({
-  description:
-    "Acknowledge a message (for messages that require acknowledgement)",
-  args: {
+export const hivemail_ack = createHiveTool<AckArgs>(
+  "Acknowledge a message (for messages that require acknowledgement)",
+  {
     message_id: tool.schema.number().describe("Message ID to acknowledge"),
   },
-  async execute(args: AckArgs, ctx: ToolContext): Promise<string> {
-    const sessionID = ctx.sessionID || "default";
-    const state = loadSessionState(sessionID);
-
+  async (args, state) => {
     if (!state) {
-      return JSON.stringify(
-        { error: "Session not initialized. Call hivemail_init first." },
-        null,
-        2,
-      );
+      throw new Error("Session not initialized");
     }
 
-    try {
-      const result = await acknowledgeSwarmMessage({
-        projectPath: state.projectKey,
-        messageId: args.message_id,
-        agentName: state.agentName,
-      });
+    const result = await acknowledgeSwarmMessage({
+      projectPath: state.projectKey,
+      messageId: args.message_id,
+      agentName: state.agentName,
+    });
 
-      return JSON.stringify(
-        {
-          acknowledged: result.acknowledged,
-          acknowledged_at: result.acknowledgedAt,
-        },
-        null,
-        2,
-      );
-    } catch (error) {
-      return JSON.stringify(
-        {
-          error: `Failed to acknowledge message: ${error instanceof Error ? error.message : String(error)}`,
-        },
-        null,
-        2,
-      );
-    }
+    return {
+      acknowledged: result.acknowledged,
+      acknowledged_at: result.acknowledgedAt,
+    };
   },
-});
+);
 
 /**
  * Check if Swarm Mail is healthy

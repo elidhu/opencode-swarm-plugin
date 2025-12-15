@@ -424,14 +424,16 @@ Use `total` for `error_count` in outcome signals.
 
 ## Using the Learning System
 
-### Integration Points
+### Integration Points (All Automatic)
 
 **1. During decomposition (hive_plan_prompt):**
 
-- Query CASS for similar tasks
-- Load pattern maturity records
-- Include proven patterns in prompt
-- Exclude deprecated patterns
+- **Automatically queries semantic memory** for similar tasks via LanceDB
+- Queries CASS for similar tasks (if enabled)
+- Loads pattern maturity records
+- Includes proven patterns in prompt
+- Excludes deprecated patterns and anti-patterns
+- Returns `memory_queried: true, patterns_found: N` in response
 
 **2. During execution:**
 
@@ -441,23 +443,31 @@ Use `total` for `error_count` in outcome signals.
 
 **3. After completion (hive_complete):**
 
-- Record outcome signals
-- Score implicit feedback
-- Update pattern observations
-- Check for anti-pattern inversions
-- Update maturity states
+- **Automatically stores successful patterns** to semantic memory
+- Extracts patterns from decomposition description
+- Generates embeddings and stores to LanceDB
+- Records outcome signals
+- Scores implicit feedback
+- Updates pattern observations
+- Checks for anti-pattern inversions (3-strike rule)
+- Updates maturity states
+- Returns `memory_stored: true` in response
 
 ### Full Workflow Example
 
 ```typescript
-// 1. Decomposition phase
-const cass_results = cass_search({ query: "user authentication", limit: 5 });
-const patterns = loadPatterns(); // Get maturity records
-const prompt = hive_plan_prompt({
+// 1. Decomposition phase (semantic memory queries automatically)
+const result = hive_plan_prompt({
   task: "Add OAuth",
-  context: formatPatternsWithMaturityForPrompt(patterns),
+  context: "Implement OAuth 2.0 with Google provider",
   query_cass: true,
 });
+
+// Tool automatically:
+// - Queries semantic memory for similar "OAuth" and "authentication" tasks
+// - Loads proven patterns from LanceDB
+// - Excludes anti-patterns
+// - Returns: { ...prompt, memory_queried: true, patterns_found: 5 }
 
 // 2. Execution phase
 const errorAccumulator = new ErrorAccumulator();
@@ -475,21 +485,26 @@ try {
   retryCount++;
 }
 
-// 3. Completion phase
+// 3. Completion phase (semantic memory stores automatically)
 const duration = Date.now() - startTime;
 const errorStats = await errorAccumulator.getErrorStats(bead_id);
 
-hive_record_outcome({
+const completeResult = hive_complete({
+  project_key: "$PWD",
+  agent_name: "worker-1",
   bead_id,
-  duration_ms: duration,
-  error_count: errorStats.total,
-  retry_count: retryCount,
-  success: true,
+  summary: "OAuth implemented with Google provider",
   files_touched: modifiedFiles,
-  strategy: "file-based",
 });
 
-// 4. Learning updates
+// Tool automatically:
+// - Extracts patterns from summary
+// - Generates embeddings with Transformers.js
+// - Stores patterns to LanceDB at .hive/vectors/patterns.lance
+// - Records outcome for maturity tracking
+// - Returns: { ...result, memory_stored: true }
+
+// 4. Learning updates (automatic but can also be done manually)
 const scored = scoreImplicitFeedback({
   bead_id,
   duration_ms: duration,
@@ -500,19 +515,9 @@ const scored = scoreImplicitFeedback({
   strategy: "file-based",
 });
 
-// Update patterns
-for (const pattern of extractedPatterns) {
-  const { pattern: updated, inversion } = recordPatternObservation(
-    pattern,
-    scored.type === "helpful",
-    bead_id,
-  );
-
-  if (inversion) {
-    console.log(`Pattern inverted: ${inversion.reason}`);
-    storeAntiPattern(inversion.inverted);
-  }
-}
+// Pattern observations tracked automatically
+// If failure_count reaches 3, auto-converts to anti-pattern
+// Anti-patterns stored with is_negative: true flag
 ```
 
 ### Configuration Tuning
@@ -582,6 +587,136 @@ console.log(weight);
 // Shows: helpful vs harmful counts, last_validated date
 ```
 
+## Semantic Memory Storage (MANDATORY)
+
+The swarm plugin uses **LanceDB** as its mandatory vector storage backend for semantic pattern memory. This is NOT optional - all pattern learning happens through persistent semantic storage.
+
+### Storage Architecture
+
+**Location:** `.hive/vectors/patterns.lance`
+
+**Embeddings:** Transformers.js with `Xenova/all-mpnet-base-v2` (768 dimensions)
+
+**Dependencies:** All bundled - no external services required
+
+### Active Integration (Not Passive Hints)
+
+Earlier versions used passive hints (`memory_query`, `memory_store` flags). Current implementation executes semantic memory operations automatically:
+
+**During decomposition:**
+- Tools automatically query past learnings before generating prompts
+- Similar patterns retrieved via vector similarity search
+- Results included in decomposition context
+
+**After completion:**
+- Successful patterns stored automatically to LanceDB
+- No manual `semantic-memory store` commands needed
+- Embeddings generated and indexed transparently
+
+**After 3-strike failures:**
+- Failed patterns automatically converted to anti-patterns
+- Stored with negative flag for exclusion in future decompositions
+
+### Tool Responses Include Memory Status
+
+Tools now return memory operation indicators:
+
+```typescript
+{
+  // ... normal tool response ...
+  memory_queried: true,
+  patterns_found: 5,
+  memory_stored: true
+}
+```
+
+Check these fields to verify semantic memory is active.
+
+### Storage Initialization
+
+Storage initializes automatically on first use:
+
+```typescript
+// No manual setup needed - this happens automatically
+const store = await getSemanticMemoryStore(); // Creates .hive/vectors/ if needed
+```
+
+**First run:** May take 5-10 seconds to download embedding model (cached after)
+
+**Subsequent runs:** Instant - model and index already on disk
+
+### Pattern Storage Lifecycle
+
+**1. Pattern Extraction (automatic on hive_complete):**
+
+```typescript
+// System extracts patterns from decomposition description
+const patterns = extractPatternsFromDescription(
+  "We split by file type, one file per subtask"
+);
+// Returns: ["Split by file type", "One file per subtask"]
+```
+
+**2. Semantic Indexing (automatic):**
+
+```typescript
+// System generates embeddings and stores to LanceDB
+await storePattern({
+  content: "Split by file type",
+  kind: "pattern",
+  is_negative: false,
+  metadata: {
+    bead_id: "bd-123.1",
+    success: true,
+    timestamp: "2024-12-15T...",
+  },
+});
+```
+
+**3. Query During Decomposition (automatic):**
+
+```typescript
+// When hive_plan_prompt runs, it queries similar patterns
+const similar = await queryPatterns(taskDescription, { limit: 5 });
+// Returns patterns ranked by cosine similarity
+```
+
+**4. Anti-Pattern Creation (automatic on 3rd failure):**
+
+```typescript
+// After 3 strikes, pattern inverted and stored as anti-pattern
+await storePattern({
+  content: "AVOID: Split by file type. Failed 5/7 times (71% failure rate)",
+  kind: "anti_pattern",
+  is_negative: true,
+  metadata: { ...original_metadata, failure_rate: 0.71 },
+});
+```
+
+### Debugging Semantic Memory
+
+**Check if storage is active:**
+
+```typescript
+const health = await store.health();
+console.log(health);
+// { healthy: true, count: 42, location: ".hive/vectors/patterns.lance" }
+```
+
+**Query patterns directly:**
+
+```typescript
+const results = await store.query("authentication tasks", { limit: 10 });
+console.log(results.map((r) => ({ content: r.content, score: r.score })));
+```
+
+**Inspect storage directory:**
+
+```bash
+ls -la .hive/vectors/patterns.lance/
+# Should see LanceDB data files
+```
+
 ## Storage Interfaces
 
 ### FeedbackStorage
@@ -611,9 +746,11 @@ interface ErrorStorage {
 }
 ```
 
-### PatternStorage
+### PatternStorage (Deprecated - Use SemanticMemoryStore)
 
-Persist decomposition patterns:
+The old `PatternStorage` interface has been replaced by `SemanticMemoryStore` which provides vector similarity search via LanceDB.
+
+**Legacy interface (for reference only):**
 
 ```typescript
 interface PatternStorage {
@@ -623,6 +760,16 @@ interface PatternStorage {
   getAntiPatterns(): Promise<DecompositionPattern[]>;
   getByTag(tag: string): Promise<DecompositionPattern[]>;
   findByContent(content: string): Promise<DecompositionPattern[]>;
+}
+```
+
+**New interface:**
+
+```typescript
+interface SemanticMemoryStore {
+  store(pattern: PatternRecord): Promise<void>;
+  query(text: string, options?: { limit?: number; threshold?: number }): Promise<PatternRecord[]>;
+  health(): Promise<{ healthy: boolean; count: number; location: string }>;
 }
 ```
 
@@ -641,4 +788,4 @@ interface MaturityStorage {
 }
 ```
 
-In-memory implementations provided for testing. Production should use persistent storage (file-based JSONL or SQLite).
+**Storage Implementation:** All storage backends use LanceDB for pattern memory. Feedback, error, and maturity records use the project's event stream storage.

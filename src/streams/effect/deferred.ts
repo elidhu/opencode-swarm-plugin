@@ -138,27 +138,6 @@ export class DurableDeferred extends Context.Tag("DurableDeferred")<
 const activeDefersMap = new Map<string, Deferred.Deferred<unknown, Error>>();
 
 /**
- * Ensure deferred table exists in database
- */
-async function ensureDeferredTable(projectPath?: string): Promise<void> {
-  const db = await getDatabase(projectPath);
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS deferred (
-      id SERIAL PRIMARY KEY,
-      url TEXT NOT NULL UNIQUE,
-      resolved BOOLEAN NOT NULL DEFAULT FALSE,
-      value JSONB,
-      error TEXT,
-      expires_at BIGINT NOT NULL,
-      created_at BIGINT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_deferred_url ON deferred(url);
-    CREATE INDEX IF NOT EXISTS idx_deferred_expires ON deferred(expires_at);
-  `);
-}
-
-/**
  * Clean up expired deferred entries
  */
 async function cleanupExpired(projectPath?: string): Promise<number> {
@@ -179,9 +158,6 @@ function createImpl<T>(
   config: DeferredConfig,
 ): Effect.Effect<DeferredHandle<T>> {
   return Effect.gen(function* (_) {
-    // Ensure table exists
-    yield* _(Effect.promise(() => ensureDeferredTable(config.projectPath)));
-
     // Generate unique URL
     const url = `deferred:${nanoid()}`;
     const expiresAt = Date.now() + config.ttlSeconds * 1000;
@@ -222,8 +198,6 @@ function resolveImpl<T>(
   projectPath?: string,
 ): Effect.Effect<void, NotFoundError> {
   return Effect.gen(function* (_) {
-    yield* _(Effect.promise(() => ensureDeferredTable(projectPath)));
-
     const db = yield* _(Effect.promise(() => getDatabase(projectPath)));
 
     // Update database
@@ -265,8 +239,6 @@ function rejectImpl(
   projectPath?: string,
 ): Effect.Effect<void, NotFoundError> {
   return Effect.gen(function* (_) {
-    yield* _(Effect.promise(() => ensureDeferredTable(projectPath)));
-
     const db = yield* _(Effect.promise(() => getDatabase(projectPath)));
 
     // Update database
@@ -303,8 +275,6 @@ function awaitImpl<T>(
   projectPath?: string,
 ): Effect.Effect<T, TimeoutError | NotFoundError> {
   return Effect.gen(function* (_) {
-    yield* _(Effect.promise(() => ensureDeferredTable(projectPath)));
-
     // Check if we have an in-memory deferred
     const deferred = activeDefersMap.get(url);
     if (deferred) {

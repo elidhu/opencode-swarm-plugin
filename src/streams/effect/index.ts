@@ -8,6 +8,8 @@
  * - DurableMailbox: Actor message passing
  * - ask: Request/response pattern (mailbox + deferred)
  * - layers: Composed service layers for common use cases
+ * - migrations: Schema initialization for Effect tables
+ * - test-utils: Test helpers for Effect streams
  */
 export * from "./cursor";
 export * from "./deferred";
@@ -15,3 +17,5 @@ export * from "./lock";
 export * from "./mailbox";
 export * from "./ask";
 export * from "./layers";
+export * from "./migrations";
+export * from "./test-utils";

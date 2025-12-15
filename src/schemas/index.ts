@@ -4,6 +4,13 @@
  * This module re-exports all schema definitions used throughout the plugin.
  * Schemas are organized by domain:
  *
+ * ## Common Schemas (Shared Primitives)
+ * - `RequiredTimestampSchema` - ISO-8601 datetime with timezone (required)
+ * - `OptionalTimestampSchema` - ISO-8601 datetime with timezone (optional)
+ * - `BeadIdSchema` - Base bead ID format validation
+ * - `SubtaskIdSchema` - Subtask ID format validation (with dot suffix)
+ * - `AnyBeadIdSchema` - Union of bead and subtask ID formats
+ *
  * ## Bead Schemas (Issue Tracking)
  * - `BeadSchema` - Core bead/issue definition
  * - `BeadStatusSchema` - Status enum (open, in_progress, blocked, closed)
@@ -26,6 +33,15 @@
  *
  * @module schemas
  */
+
+// Common schemas
+export {
+  RequiredTimestampSchema,
+  OptionalTimestampSchema,
+  BeadIdSchema,
+  SubtaskIdSchema,
+  AnyBeadIdSchema,
+} from "./common";
 
 // Bead schemas
 export {

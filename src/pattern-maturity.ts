@@ -846,43 +846,7 @@ export interface PatternStorage {
   findByContent(content: string): Promise<DecompositionPattern[]>;
 }
 
-/**
- * In-memory pattern storage (for testing and short-lived sessions)
- */
-export class InMemoryPatternStorage implements PatternStorage {
-  private patterns: Map<string, DecompositionPattern> = new Map();
 
-  async store(pattern: DecompositionPattern): Promise<void> {
-    this.patterns.set(pattern.id, pattern);
-  }
-
-  async get(id: string): Promise<DecompositionPattern | null> {
-    return this.patterns.get(id) ?? null;
-  }
-
-  async getAll(): Promise<DecompositionPattern[]> {
-    return Array.from(this.patterns.values());
-  }
-
-  async getAntiPatterns(): Promise<DecompositionPattern[]> {
-    return Array.from(this.patterns.values()).filter(
-      (p) => p.kind === "anti_pattern",
-    );
-  }
-
-  async getByTag(tag: string): Promise<DecompositionPattern[]> {
-    return Array.from(this.patterns.values()).filter((p) =>
-      p.tags.includes(tag),
-    );
-  }
-
-  async findByContent(content: string): Promise<DecompositionPattern[]> {
-    const lower = content.toLowerCase();
-    return Array.from(this.patterns.values()).filter((p) =>
-      p.content.toLowerCase().includes(lower),
-    );
-  }
-}
 
 /**
  * Storage interface for pattern maturity records
@@ -902,39 +866,7 @@ export interface MaturityStorage {
   getFeedback(patternId: string): Promise<MaturityFeedback[]>;
 }
 
-/**
- * In-memory maturity storage (for testing and short-lived sessions)
- */
-export class InMemoryMaturityStorage implements MaturityStorage {
-  private maturities: Map<string, PatternMaturity> = new Map();
-  private feedback: MaturityFeedback[] = [];
 
-  async store(maturity: PatternMaturity): Promise<void> {
-    this.maturities.set(maturity.pattern_id, maturity);
-  }
-
-  async get(patternId: string): Promise<PatternMaturity | null> {
-    return this.maturities.get(patternId) ?? null;
-  }
-
-  async getAll(): Promise<PatternMaturity[]> {
-    return Array.from(this.maturities.values());
-  }
-
-  async getByState(state: MaturityState): Promise<PatternMaturity[]> {
-    return Array.from(this.maturities.values()).filter(
-      (m) => m.state === state,
-    );
-  }
-
-  async storeFeedback(feedback: MaturityFeedback): Promise<void> {
-    this.feedback.push(feedback);
-  }
-
-  async getFeedback(patternId: string): Promise<MaturityFeedback[]> {
-    return this.feedback.filter((f) => f.pattern_id === patternId);
-  }
-}
 
 // ============================================================================
 // Exports

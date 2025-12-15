@@ -142,18 +142,13 @@ export type CLIToolName = keyof typeof allTools;
 
 export {
   createStorage,
-  createStorageWithFallback,
   getStorage,
   setStorage,
   resetStorage,
-  InMemoryStorage,
-  SemanticMemoryStorage,
-  isSemanticMemoryAvailable,
+  LanceDBStorage,
   DEFAULT_STORAGE_CONFIG,
   type LearningStorage,
   type StorageConfig,
-  type StorageBackend,
-  type StorageCollections,
 } from "./storage";
 
 export {

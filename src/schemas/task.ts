@@ -5,6 +5,7 @@
  * into parallelizable subtasks for hive execution.
  */
 import { z } from "zod";
+import { RequiredTimestampSchema } from "./common";
 
 /**
  * Effort estimation for subtasks.
@@ -116,7 +117,7 @@ export const SwarmSpawnResultSchema = z.object({
   coordinator_name: z.string(), // Agent Mail name of coordinator
   thread_id: z.string(), // Agent Mail thread for this hive
   agents: z.array(SpawnedAgentSchema),
-  started_at: z.string().datetime({ offset: true }), // ISO-8601 with timezone
+  started_at: RequiredTimestampSchema,
 });
 export type SwarmSpawnResult = z.infer<typeof SwarmSpawnResultSchema>;
 
@@ -132,7 +133,7 @@ export const AgentProgressSchema = z
     message: z.string().optional(),
     files_touched: z.array(z.string()).optional(),
     blockers: z.array(z.string()).optional(),
-    timestamp: z.string().datetime({ offset: true }), // ISO-8601 with timezone
+    timestamp: RequiredTimestampSchema,
   })
   .refine(
     (data) =>
@@ -152,6 +153,6 @@ export const SwarmStatusSchema = z.object({
   failed: z.number().int().min(0),
   blocked: z.number().int().min(0),
   agents: z.array(SpawnedAgentSchema),
-  last_update: z.string().datetime({ offset: true }), // ISO-8601 with timezone
+  last_update: RequiredTimestampSchema,
 });
 export type SwarmStatus = z.infer<typeof SwarmStatusSchema>;

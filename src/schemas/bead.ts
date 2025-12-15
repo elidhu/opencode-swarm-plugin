@@ -5,6 +5,11 @@
  * type safety and catch malformed responses early.
  */
 import { z } from "zod";
+import {
+  AnyBeadIdSchema,
+  OptionalTimestampSchema,
+  RequiredTimestampSchema,
+} from "./common";
 
 /** Valid bead statuses */
 export const BeadStatusSchema = z.enum([
@@ -51,31 +56,15 @@ export const BeadSchema = z.object({
    * - `my-project-abc12.1` (first subtask)
    * - `my-project-abc12.2` (second subtask)
    */
-  id: z
-    .string()
-    .regex(
-      /^[a-z0-9]+(-[a-z0-9]+)+(\.[\w-]+)?$/,
-      "Invalid bead ID format (expected: project-slug-hash or project-slug-hash.N)",
-    ),
+  id: AnyBeadIdSchema,
   title: z.string().min(1, "Title required"),
   description: z.string().optional().default(""),
   status: BeadStatusSchema.default("open"),
   priority: z.number().int().min(0).max(3).default(2),
   issue_type: BeadTypeSchema.default("task"),
-  created_at: z.string().datetime({
-    offset: true,
-    message:
-      "Must be ISO-8601 datetime with timezone (e.g., 2024-01-15T10:30:00Z)",
-  }),
-  updated_at: z
-    .string()
-    .datetime({
-      offset: true,
-      message:
-        "Must be ISO-8601 datetime with timezone (e.g., 2024-01-15T10:30:00Z)",
-    })
-    .optional(),
-  closed_at: z.string().datetime({ offset: true }).optional(),
+  created_at: RequiredTimestampSchema,
+  updated_at: OptionalTimestampSchema,
+  closed_at: OptionalTimestampSchema,
   parent_id: z.string().optional(),
   dependencies: z.array(BeadDependencySchema).default([]),
   metadata: z.record(z.string(), z.unknown()).optional(),

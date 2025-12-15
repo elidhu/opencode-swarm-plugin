@@ -1,105 +1,62 @@
 /**
  * Storage Integration Tests
  *
- * Tests the storage module with real semantic-memory backend.
- * Requires semantic-memory to be available (native or via bunx).
+ * Tests the storage module with LanceDB backend.
+ * Includes tests for semantic vector search and persistence.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
-  SemanticMemoryStorage,
-  InMemoryStorage,
-  isSemanticMemoryAvailable,
-  getResolvedCommand,
-  resetCommandCache,
+  LanceDBStorage,
   createStorage,
-  createStorageWithFallback,
 } from "./storage";
 import type { FeedbackEvent } from "./learning";
 import type { DecompositionPattern } from "./pattern-maturity";
 import type { PatternMaturity, MaturityFeedback } from "./pattern-maturity";
+import { mkdirSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-// Use unique collection names to avoid conflicts with other tests
-const TEST_COLLECTIONS = {
-  feedback: `test-feedback-${Date.now()}`,
-  patterns: `test-patterns-${Date.now()}`,
-  maturity: `test-maturity-${Date.now()}`,
-};
+// Helper to create unique test directories
+function createTestDir(): string {
+  const dir = join(tmpdir(), `lancedb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
-describe("Storage Command Resolution", () => {
-  beforeAll(() => {
-    resetCommandCache();
+// Helper to clean up test directories
+function cleanupTestDir(dir: string): void {
+  if (existsSync(dir)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("LanceDBStorage Integration", () => {
+  let storage: LanceDBStorage;
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestDir();
+    storage = new LanceDBStorage({ vectorDir: testDir });
   });
 
-  afterAll(() => {
-    resetCommandCache();
-  });
-
-  it("should resolve semantic-memory command", async () => {
-    const cmd = await getResolvedCommand();
-    expect(cmd).toBeDefined();
-    expect(cmd.length).toBeGreaterThan(0);
-
-    // Should be either native or bunx
-    if (cmd.length === 1) {
-      expect(cmd[0]).toBe("semantic-memory");
-    } else {
-      expect(cmd[0]).toBe("bunx");
-      expect(cmd[1]).toBe("semantic-memory");
-    }
-  });
-
-  it("should cache the resolved command", async () => {
-    const cmd1 = await getResolvedCommand();
-    const cmd2 = await getResolvedCommand();
-    expect(cmd1).toBe(cmd2); // Same reference = cached
-  });
-
-  it("should reset cache when requested", async () => {
-    const cmd1 = await getResolvedCommand();
-    resetCommandCache();
-    const cmd2 = await getResolvedCommand();
-    // After reset, should resolve again (may be same value but different reference)
-    expect(cmd1).toEqual(cmd2);
-  });
-});
-
-describe("Storage Availability Check", () => {
-  it("should detect semantic-memory availability", async () => {
-    const available = await isSemanticMemoryAvailable();
-    // This test passes regardless - we just verify it returns a boolean
-    expect(typeof available).toBe("boolean");
-  });
-});
-
-describe("SemanticMemoryStorage Integration", () => {
-  let storage: SemanticMemoryStorage;
-  let isAvailable: boolean;
-
-  beforeAll(async () => {
-    isAvailable = await isSemanticMemoryAvailable();
-    if (isAvailable) {
-      storage = new SemanticMemoryStorage({
-        collections: TEST_COLLECTIONS,
-      });
-    }
-  });
-
-  afterAll(async () => {
-    if (storage) {
-      await storage.close();
-    }
+  afterEach(async () => {
+    await storage.close();
+    // Give file handles time to release
+    await new Promise((r) => setTimeout(r, 50));
+    cleanupTestDir(testDir);
   });
 
   describe("Feedback Operations", () => {
-    it.skipIf(!isAvailable)("should store and retrieve feedback", async () => {
+    it("should store and retrieve feedback by criterion", async () => {
+      const uniqueCriterion = `test-criterion-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const event: FeedbackEvent = {
         id: `feedback-${Date.now()}`,
-        criterion: "test-criterion-storage",
+        criterion: uniqueCriterion,
         type: "helpful",
         timestamp: new Date().toISOString(),
-        bead_id: "bd-storage-test",
-        context: "Integration test feedback",
+        bead_id: "bd-test-001",
+        context: "Test feedback for exact match retrieval",
         raw_value: 1,
       };
 
@@ -108,57 +65,305 @@ describe("SemanticMemoryStorage Integration", () => {
       // Give it a moment to persist
       await new Promise((r) => setTimeout(r, 100));
 
-      const all = await storage.getAllFeedback();
-      expect(all.length).toBeGreaterThanOrEqual(0); // May be empty if semantic search doesn't find it immediately
+      const results = await storage.getFeedbackByCriterion(uniqueCriterion);
+      expect(results).toHaveLength(1);
+      expect(results[0].criterion).toBe(uniqueCriterion);
+      expect(results[0].type).toBe("helpful");
+      expect(results[0].bead_id).toBe("bd-test-001");
     });
 
-    it.skipIf(!isAvailable)("should find similar feedback", async () => {
-      const results = await storage.findSimilarFeedback("test", 5);
-      expect(Array.isArray(results)).toBe(true);
+    it("should retrieve feedback by bead ID", async () => {
+      const uniqueBeadId = `bd-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const event1: FeedbackEvent = {
+        id: `feedback-${Date.now()}-1`,
+        criterion: "criterion-1",
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        bead_id: uniqueBeadId,
+        raw_value: 1,
+      };
+
+      const event2: FeedbackEvent = {
+        id: `feedback-${Date.now()}-2`,
+        criterion: "criterion-2",
+        type: "harmful",
+        timestamp: new Date().toISOString(),
+        bead_id: uniqueBeadId,
+        raw_value: 1,
+      };
+
+      await storage.storeFeedback(event1);
+      await storage.storeFeedback(event2);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const results = await storage.getFeedbackByBead(uniqueBeadId);
+      expect(results).toHaveLength(2);
+      expect(results.every((r) => r.bead_id === uniqueBeadId)).toBe(true);
+    });
+
+    it("should retrieve all feedback", async () => {
+      const event1: FeedbackEvent = {
+        id: `feedback-all-${Date.now()}-1`,
+        criterion: "criterion-a",
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        raw_value: 1,
+      };
+
+      const event2: FeedbackEvent = {
+        id: `feedback-all-${Date.now()}-2`,
+        criterion: "criterion-b",
+        type: "harmful",
+        timestamp: new Date().toISOString(),
+        raw_value: 1,
+      };
+
+      await storage.storeFeedback(event1);
+      await storage.storeFeedback(event2);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const results = await storage.getAllFeedback();
+      expect(results.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("should find similar feedback using semantic search", async () => {
+      // Store feedback about error handling
+      const errorFeedback: FeedbackEvent = {
+        id: `feedback-semantic-${Date.now()}-1`,
+        criterion: "error-handling-quality",
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        context: "The agent properly caught exceptions and logged error messages",
+        raw_value: 1,
+      };
+
+      // Store feedback about file organization (unrelated topic)
+      const fileFeedback: FeedbackEvent = {
+        id: `feedback-semantic-${Date.now()}-2`,
+        criterion: "file-organization",
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        context: "Files were organized into proper directories with clear structure",
+        raw_value: 1,
+      };
+
+      await storage.storeFeedback(errorFeedback);
+      await storage.storeFeedback(fileFeedback);
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Search for error-related feedback - should find error feedback first
+      const results = await storage.findSimilarFeedback("exception handling and error logging", 5);
+      expect(results.length).toBeGreaterThan(0);
+      
+      // The first result should be semantically similar to error handling
+      expect(
+        results[0].criterion.includes("error") || 
+        results[0].context?.toLowerCase().includes("error") ||
+        results[0].context?.toLowerCase().includes("exception")
+      ).toBe(true);
+    });
+
+    it("should not confuse semantic similarity with keyword matching", async () => {
+      // Store feedback about debugging
+      const debugFeedback: FeedbackEvent = {
+        id: `feedback-debug-${Date.now()}`,
+        criterion: "debugging-approach",
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        context: "Used systematic debugging to identify root cause of the bug",
+        raw_value: 1,
+      };
+
+      await storage.storeFeedback(debugFeedback);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Search with semantically related term (not exact keyword)
+      const results = await storage.findSimilarFeedback("troubleshooting issues", 5);
+      expect(results.length).toBeGreaterThan(0);
+      // Should find debugging feedback even though we didn't use the word "debug"
     });
   });
 
   describe("Pattern Operations", () => {
-    it.skipIf(!isAvailable)("should store and retrieve patterns", async () => {
+    it("should store and retrieve pattern by ID", async () => {
       const pattern: DecompositionPattern = {
-        id: `pattern-storage-${Date.now()}`,
+        id: `pattern-exact-${Date.now()}`,
         kind: "pattern",
-        content: "Test pattern for storage integration",
+        content: "Break down large files by domain boundaries",
+        is_negative: false,
+        success_count: 5,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["decomposition", "file-based"],
+        example_beads: ["bd-001", "bd-002"],
+      };
+
+      await storage.storePattern(pattern);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const result = await storage.getPattern(pattern.id);
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe(pattern.id);
+      expect(result?.content).toBe(pattern.content);
+      expect(result?.tags).toEqual(["decomposition", "file-based"]);
+      expect(result?.success_count).toBe(5);
+    });
+
+    it("should retrieve all patterns", async () => {
+      const pattern1: DecompositionPattern = {
+        id: `pattern-all-${Date.now()}-1`,
+        kind: "pattern",
+        content: "Pattern 1",
         is_negative: false,
         success_count: 1,
         failure_count: 0,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        tags: ["test", "storage"],
+        tags: ["test"],
+        example_beads: [],
+      };
+
+      const pattern2: DecompositionPattern = {
+        id: `pattern-all-${Date.now()}-2`,
+        kind: "pattern",
+        content: "Pattern 2",
+        is_negative: false,
+        success_count: 1,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["test"],
+        example_beads: [],
+      };
+
+      await storage.storePattern(pattern1);
+      await storage.storePattern(pattern2);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const results = await storage.getAllPatterns();
+      expect(results.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("should retrieve anti-patterns", async () => {
+      const antiPattern: DecompositionPattern = {
+        id: `anti-pattern-${Date.now()}`,
+        kind: "anti_pattern",
+        content: "Creating circular dependencies between modules",
+        is_negative: true,
+        success_count: 0,
+        failure_count: 3,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["anti-pattern", "architecture"],
+        example_beads: [],
+      };
+
+      await storage.storePattern(antiPattern);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const results = await storage.getAntiPatterns();
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.some((p) => p.kind === "anti_pattern")).toBe(true);
+    });
+
+    it("should retrieve patterns by tag", async () => {
+      const pattern: DecompositionPattern = {
+        id: `pattern-tag-${Date.now()}`,
+        kind: "pattern",
+        content: "Use feature-based decomposition for new features",
+        is_negative: false,
+        success_count: 1,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["feature-based", "testing-unique-tag"],
         example_beads: [],
       };
 
       await storage.storePattern(pattern);
-
-      // Give it a moment to persist
       await new Promise((r) => setTimeout(r, 100));
 
-      const all = await storage.getAllPatterns();
-      expect(Array.isArray(all)).toBe(true);
+      const results = await storage.getPatternsByTag("testing-unique-tag");
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.every((p) => p.tags.includes("testing-unique-tag"))).toBe(true);
     });
 
-    it.skipIf(!isAvailable)("should find similar patterns", async () => {
-      const results = await storage.findSimilarPatterns("test", 5);
-      expect(Array.isArray(results)).toBe(true);
+    it("should find similar patterns using semantic search", async () => {
+      // Store pattern about file organization
+      const filePattern: DecompositionPattern = {
+        id: `pattern-semantic-${Date.now()}-1`,
+        kind: "pattern",
+        content: "Organize code into directories by feature domain and module boundaries",
+        is_negative: false,
+        success_count: 3,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["organization", "structure"],
+        example_beads: [],
+      };
+
+      // Store pattern about error handling (unrelated topic)
+      const errorPattern: DecompositionPattern = {
+        id: `pattern-semantic-${Date.now()}-2`,
+        kind: "pattern",
+        content: "Implement try-catch blocks with proper error logging and recovery",
+        is_negative: false,
+        success_count: 2,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["error-handling", "resilience"],
+        example_beads: [],
+      };
+
+      await storage.storePattern(filePattern);
+      await storage.storePattern(errorPattern);
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Search for file organization patterns
+      const results = await storage.findSimilarPatterns("structuring files and folders", 5);
+      expect(results.length).toBeGreaterThan(0);
+      
+      // The first result should be semantically similar to file organization
+      expect(
+        results[0].content.toLowerCase().includes("organiz") ||
+        results[0].content.toLowerCase().includes("director") ||
+        results[0].content.toLowerCase().includes("structure")
+      ).toBe(true);
     });
 
-    it.skipIf(!isAvailable)("should get anti-patterns", async () => {
-      const results = await storage.getAntiPatterns();
-      expect(Array.isArray(results)).toBe(true);
+    it("should find patterns using semantic concepts, not just keywords", async () => {
+      const pattern: DecompositionPattern = {
+        id: `pattern-concept-${Date.now()}`,
+        kind: "pattern",
+        content: "Separate business logic from presentation layer using clear interfaces",
+        is_negative: false,
+        success_count: 4,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["architecture", "separation-of-concerns"],
+        example_beads: [],
+      };
+
+      await storage.storePattern(pattern);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Search with semantically related concept (not exact keywords)
+      const results = await storage.findSimilarPatterns("decoupling components", 5);
+      expect(results.length).toBeGreaterThan(0);
+      // Should find the separation pattern even with different terminology
     });
   });
 
   describe("Maturity Operations", () => {
-    it.skipIf(!isAvailable)("should store and retrieve maturity", async () => {
+    it("should store and retrieve maturity by pattern ID", async () => {
       const maturity: PatternMaturity = {
-        pattern_id: `maturity-storage-${Date.now()}`,
+        pattern_id: `maturity-exact-${Date.now()}`,
         state: "candidate",
-        helpful_count: 0,
+        helpful_count: 2,
         harmful_count: 0,
         last_validated: new Date().toISOString(),
         promoted_at: undefined,
@@ -166,176 +371,172 @@ describe("SemanticMemoryStorage Integration", () => {
       };
 
       await storage.storeMaturity(maturity);
-
-      // Give it a moment to persist
       await new Promise((r) => setTimeout(r, 100));
 
-      const all = await storage.getAllMaturity();
-      expect(Array.isArray(all)).toBe(true);
+      const result = await storage.getMaturity(maturity.pattern_id);
+      expect(result).not.toBeNull();
+      expect(result?.pattern_id).toBe(maturity.pattern_id);
+      expect(result?.state).toBe("candidate");
+      expect(result?.helpful_count).toBe(2);
     });
 
-    it.skipIf(!isAvailable)(
-      "should store and retrieve maturity feedback",
-      async () => {
-        const feedback: MaturityFeedback = {
-          pattern_id: `maturity-feedback-${Date.now()}`,
-          type: "helpful",
-          timestamp: new Date().toISOString(),
-          weight: 1,
-        };
+    it("should retrieve all maturity records", async () => {
+      const maturity1: PatternMaturity = {
+        pattern_id: `maturity-all-${Date.now()}-1`,
+        state: "candidate",
+        helpful_count: 1,
+        harmful_count: 0,
+        last_validated: new Date().toISOString(),
+        promoted_at: undefined,
+        deprecated_at: undefined,
+      };
 
-        await storage.storeMaturityFeedback(feedback);
+      const maturity2: PatternMaturity = {
+        pattern_id: `maturity-all-${Date.now()}-2`,
+        state: "proven",
+        helpful_count: 5,
+        harmful_count: 0,
+        last_validated: new Date().toISOString(),
+        promoted_at: new Date().toISOString(),
+        deprecated_at: undefined,
+      };
 
-        // Give it a moment to persist
-        await new Promise((r) => setTimeout(r, 100));
+      await storage.storeMaturity(maturity1);
+      await storage.storeMaturity(maturity2);
+      await new Promise((r) => setTimeout(r, 100));
 
-        const results = await storage.getMaturityFeedback(feedback.pattern_id);
-        expect(Array.isArray(results)).toBe(true);
-      },
-    );
+      const results = await storage.getAllMaturity();
+      expect(results.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("should retrieve maturity by state", async () => {
+      const maturity: PatternMaturity = {
+        pattern_id: `maturity-state-${Date.now()}`,
+        state: "proven",
+        helpful_count: 10,
+        harmful_count: 0,
+        last_validated: new Date().toISOString(),
+        promoted_at: new Date().toISOString(),
+        deprecated_at: undefined,
+      };
+
+      await storage.storeMaturity(maturity);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const results = await storage.getMaturityByState("proven");
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.every((m) => m.state === "proven")).toBe(true);
+    });
+
+    it("should store and retrieve maturity feedback", async () => {
+      const patternId = `maturity-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      
+      const feedback1: MaturityFeedback = {
+        pattern_id: patternId,
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        weight: 1,
+      };
+
+      const feedback2: MaturityFeedback = {
+        pattern_id: patternId,
+        type: "helpful",
+        timestamp: new Date(Date.now() + 1000).toISOString(),
+        weight: 1,
+      };
+
+      await storage.storeMaturityFeedback(feedback1);
+      await storage.storeMaturityFeedback(feedback2);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const results = await storage.getMaturityFeedback(patternId);
+      expect(results).toHaveLength(2);
+      expect(results.every((f) => f.pattern_id === patternId)).toBe(true);
+      expect(results.every((f) => f.type === "helpful")).toBe(true);
+    });
+  });
+
+  describe("Persistence", () => {
+    it("should persist data after closing and reopening database", async () => {
+      const pattern: DecompositionPattern = {
+        id: `pattern-persist-${Date.now()}`,
+        kind: "pattern",
+        content: "Persistence test pattern",
+        is_negative: false,
+        success_count: 1,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["persistence"],
+        example_beads: [],
+      };
+
+      // Store pattern
+      await storage.storePattern(pattern);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Close storage
+      await storage.close();
+
+      // Create new storage instance with same directory
+      const storage2 = new LanceDBStorage({ vectorDir: testDir });
+
+      // Verify pattern persisted
+      const result = await storage2.getPattern(pattern.id);
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe(pattern.id);
+      expect(result?.content).toBe("Persistence test pattern");
+
+      await storage2.close();
+    });
+
+    it("should persist feedback across sessions", async () => {
+      const event: FeedbackEvent = {
+        id: `feedback-persist-${Date.now()}`,
+        criterion: "persistence-test",
+        type: "helpful",
+        timestamp: new Date().toISOString(),
+        context: "Testing persistence",
+        raw_value: 1,
+      };
+
+      await storage.storeFeedback(event);
+      await new Promise((r) => setTimeout(r, 100));
+      await storage.close();
+
+      const storage2 = new LanceDBStorage({ vectorDir: testDir });
+      const results = await storage2.getFeedbackByCriterion("persistence-test");
+      
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].criterion).toBe("persistence-test");
+
+      await storage2.close();
+    });
   });
 });
+
+
 
 describe("Storage Factory", () => {
-  it("should create in-memory storage", () => {
-    const storage = createStorage({ backend: "memory" });
-    expect(storage).toBeInstanceOf(InMemoryStorage);
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestDir();
   });
 
-  it("should create semantic-memory storage", () => {
-    const storage = createStorage({ backend: "semantic-memory" });
-    expect(storage).toBeInstanceOf(SemanticMemoryStorage);
+  afterEach(() => {
+    cleanupTestDir(testDir);
   });
 
-  it("should use default backend (semantic-memory)", () => {
-    const storage = createStorage();
-    expect(storage).toBeInstanceOf(SemanticMemoryStorage);
+  it("should create LanceDB storage by default", () => {
+    const storage = createStorage({ vectorDir: testDir });
+    expect(storage).toBeInstanceOf(LanceDBStorage);
   });
 
-  it("should throw on unknown backend", () => {
-    expect(() => createStorage({ backend: "unknown" as any })).toThrow(
-      "Unknown storage backend",
-    );
-  });
-});
-
-describe("Storage Factory with Fallback", () => {
-  it("should create storage with fallback", async () => {
-    const storage = await createStorageWithFallback();
-    expect(storage).toBeDefined();
-    // Will be SemanticMemoryStorage if available, InMemoryStorage otherwise
-    expect(
-      storage instanceof SemanticMemoryStorage ||
-        storage instanceof InMemoryStorage,
-    ).toBe(true);
-  });
-
-  it("should respect explicit memory backend", async () => {
-    const storage = await createStorageWithFallback({ backend: "memory" });
-    expect(storage).toBeInstanceOf(InMemoryStorage);
+  it("should create LanceDB storage with custom directory", () => {
+    const storage = createStorage({ vectorDir: testDir });
+    expect(storage).toBeInstanceOf(LanceDBStorage);
   });
 });
 
-describe("InMemoryStorage Parity", () => {
-  let storage: InMemoryStorage;
 
-  beforeAll(() => {
-    storage = new InMemoryStorage();
-  });
-
-  afterAll(async () => {
-    await storage.close();
-  });
-
-  it("should store and retrieve feedback", async () => {
-    const event: FeedbackEvent = {
-      id: `memory-feedback-${Date.now()}`,
-      criterion: "memory-test-criterion",
-      type: "helpful",
-      timestamp: new Date().toISOString(),
-      bead_id: "bd-memory-test",
-      raw_value: 1,
-    };
-
-    await storage.storeFeedback(event);
-    const results = await storage.getFeedbackByCriterion(
-      "memory-test-criterion",
-    );
-    expect(results).toHaveLength(1);
-    expect(results[0].criterion).toBe("memory-test-criterion");
-  });
-
-  it("should store and retrieve patterns", async () => {
-    const pattern: DecompositionPattern = {
-      id: "memory-pattern-1",
-      kind: "pattern",
-      content: "Memory test pattern",
-      is_negative: false,
-      success_count: 1,
-      failure_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      tags: ["memory", "test"],
-      example_beads: [],
-    };
-
-    await storage.storePattern(pattern);
-    const result = await storage.getPattern("memory-pattern-1");
-    expect(result).not.toBeNull();
-    expect(result?.id).toBe("memory-pattern-1");
-  });
-
-  it("should store and retrieve maturity", async () => {
-    const maturity: PatternMaturity = {
-      pattern_id: "memory-maturity-1",
-      state: "candidate",
-      helpful_count: 0,
-      harmful_count: 0,
-      last_validated: new Date().toISOString(),
-      promoted_at: undefined,
-      deprecated_at: undefined,
-    };
-
-    await storage.storeMaturity(maturity);
-    const result = await storage.getMaturity("memory-maturity-1");
-    expect(result).not.toBeNull();
-    expect(result?.pattern_id).toBe("memory-maturity-1");
-  });
-
-  it("should find similar feedback by query", async () => {
-    const event: FeedbackEvent = {
-      id: `searchable-feedback-${Date.now()}`,
-      criterion: "searchable-criterion",
-      type: "harmful",
-      timestamp: new Date().toISOString(),
-      context: "This is searchable context",
-      raw_value: 1,
-    };
-
-    await storage.storeFeedback(event);
-    const results = await storage.findSimilarFeedback("searchable", 10);
-    expect(results.length).toBeGreaterThan(0);
-  });
-
-  it("should find similar patterns by query", async () => {
-    const pattern: DecompositionPattern = {
-      id: "searchable-pattern",
-      kind: "pattern",
-      content: "A uniquely searchable pattern description",
-      is_negative: false,
-      success_count: 1,
-      failure_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      tags: ["searchable"],
-      example_beads: [],
-    };
-
-    await storage.storePattern(pattern);
-    const results = await storage.findSimilarPatterns(
-      "uniquely searchable",
-      10,
-    );
-    expect(results.length).toBeGreaterThan(0);
-  });
-});

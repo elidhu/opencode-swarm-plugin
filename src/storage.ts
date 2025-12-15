@@ -1,154 +1,50 @@
 /**
- * Storage Module - Pluggable persistence for learning data
+ * Storage Module - Persistent vector storage for learning data
  *
- * Provides a unified storage interface with multiple backends:
- * - semantic-memory (default) - Persistent with semantic search
- * - in-memory - For testing and ephemeral sessions
+ * Provides LanceDB-backed persistent vector storage with semantic search.
  *
- * The semantic-memory backend uses collections:
- * - `hive-feedback` - Criterion feedback events
- * - `hive-patterns` - Decomposition patterns and anti-patterns
- * - `hive-maturity` - Pattern maturity tracking
+ * The lancedb backend uses tables:
+ * - `feedback` - Criterion feedback events with embeddings
+ * - `patterns` - Decomposition patterns and anti-patterns with embeddings
+ * - `maturity` - Pattern maturity tracking
+ * - `maturity-feedback` - Maturity feedback events
+ * - `strikes` - Strike records for detecting architectural problems
+ * - `errors` - Error entries accumulated during subtask execution
  *
  * @example
  * ```typescript
- * // Use default semantic-memory storage
+ * // Use default lancedb storage
  * const storage = createStorage();
  *
- * // Or configure explicitly
- * const storage = createStorage({
- *   backend: "semantic-memory",
- *   collections: {
- *     feedback: "my-feedback",
- *     patterns: "my-patterns",
- *     maturity: "my-maturity",
- *   },
- * });
- *
- * // Or use in-memory for testing
- * const storage = createStorage({ backend: "memory" });
+ * // Custom vector directory
+ * const storage = createStorage({ vectorDir: ".custom-vectors" });
  * ```
  */
 
-import type { FeedbackEvent } from "./learning";
+import type { FeedbackEvent, StrikeRecord, ErrorEntry } from "./learning";
 import type { DecompositionPattern } from "./pattern-maturity";
 import type { PatternMaturity, MaturityFeedback } from "./pattern-maturity";
-import { InMemoryFeedbackStorage } from "./learning";
-import { InMemoryPatternStorage } from "./pattern-maturity";
-import { InMemoryMaturityStorage } from "./pattern-maturity";
+import * as lancedb from "@lancedb/lancedb";
+import { embed, EMBEDDING_DIMENSION } from "./embeddings";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
-// ============================================================================
-// Command Resolution
-// ============================================================================
 
-/**
- * Cached semantic-memory command (native or bunx fallback)
- */
-let cachedCommand: string[] | null = null;
-
-/**
- * Resolve the semantic-memory command
- *
- * Checks for native install first, falls back to bunx.
- * Result is cached for the session.
- */
-async function resolveSemanticMemoryCommand(): Promise<string[]> {
-  if (cachedCommand) return cachedCommand;
-
-  // Try native install first
-  const nativeResult = await Bun.$`which semantic-memory`.quiet().nothrow();
-  if (nativeResult.exitCode === 0) {
-    cachedCommand = ["semantic-memory"];
-    return cachedCommand;
-  }
-
-  // Fall back to bunx
-  cachedCommand = ["bunx", "semantic-memory"];
-  return cachedCommand;
-}
-
-/**
- * Execute semantic-memory command with args
- */
-async function execSemanticMemory(
-  args: string[],
-): Promise<{ exitCode: number; stdout: Buffer; stderr: Buffer }> {
-  try {
-    const cmd = await resolveSemanticMemoryCommand();
-    const fullCmd = [...cmd, ...args];
-
-    // Use Bun.spawn for dynamic command arrays
-    const proc = Bun.spawn(fullCmd, {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    try {
-      const stdout = Buffer.from(await new Response(proc.stdout).arrayBuffer());
-      const stderr = Buffer.from(await new Response(proc.stderr).arrayBuffer());
-      const exitCode = await proc.exited;
-
-      return { exitCode, stdout, stderr };
-    } finally {
-      // Ensure process cleanup
-      proc.kill();
-    }
-  } catch (error) {
-    // Return structured error result on exceptions
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      exitCode: 1,
-      stdout: Buffer.from(""),
-      stderr: Buffer.from(`Error executing semantic-memory: ${errorMessage}`),
-    };
-  }
-}
-
-/**
- * Reset the cached command (for testing)
- */
-export function resetCommandCache(): void {
-  cachedCommand = null;
-}
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 /**
- * Storage backend type
- */
-export type StorageBackend = "semantic-memory" | "memory";
-
-/**
- * Collection names for semantic-memory
- */
-export interface StorageCollections {
-  feedback: string;
-  patterns: string;
-  maturity: string;
-}
-
-/**
  * Storage configuration
  */
 export interface StorageConfig {
-  /** Backend to use (default: "semantic-memory") */
-  backend: StorageBackend;
-  /** Collection names for semantic-memory backend */
-  collections: StorageCollections;
-  /** Whether to use semantic search for queries (default: true) */
-  useSemanticSearch: boolean;
+  /** Directory for LanceDB storage (default: ".hive/vectors") */
+  vectorDir?: string;
 }
 
 export const DEFAULT_STORAGE_CONFIG: StorageConfig = {
-  backend: "semantic-memory",
-  collections: {
-    feedback: "hive-feedback",
-    patterns: "hive-patterns",
-    maturity: "hive-maturity",
-  },
-  useSemanticSearch: true,
+  vectorDir: ".hive/vectors",
 };
 
 // ============================================================================
@@ -185,135 +81,173 @@ export interface LearningStorage {
   storeMaturityFeedback(feedback: MaturityFeedback): Promise<void>;
   getMaturityFeedback(patternId: string): Promise<MaturityFeedback[]>;
 
+  // Strike operations
+  storeStrike(record: StrikeRecord): Promise<void>;
+  getStrike(beadId: string): Promise<StrikeRecord | null>;
+  getAllStrikes(): Promise<StrikeRecord[]>;
+  clearStrike(beadId: string): Promise<void>;
+
+  // Error operations
+  storeError(entry: ErrorEntry): Promise<void>;
+  getErrorsByBead(beadId: string): Promise<ErrorEntry[]>;
+  getUnresolvedErrorsByBead(beadId: string): Promise<ErrorEntry[]>;
+  markErrorResolved(id: string): Promise<void>;
+  getAllErrors(): Promise<ErrorEntry[]>;
+
   // Lifecycle
   close(): Promise<void>;
 }
 
 // ============================================================================
-// Semantic Memory Storage Implementation
+// LanceDB Storage Implementation
 // ============================================================================
 
+/** Per-directory LanceDB connection instances */
+const lanceDbInstances = new Map<string, lancedb.Connection>();
+
+/** Pending LanceDB initialization promises to prevent race conditions */
+const lanceDbInitPromises = new Map<string, Promise<lancedb.Connection>>();
+
+/** Track which tables have been initialized per directory */
+const initializedTables = new Map<string, Set<string>>();
+
 /**
- * Semantic-memory backed storage
+ * Get or create the LanceDB connection for a specific directory
  *
- * Uses the semantic-memory CLI for persistence with semantic search.
- * Data survives across sessions and can be searched by meaning.
+ * Uses per-directory singleton pattern with lazy initialization.
+ * Multiple concurrent calls to the same directory will share the same pending promise.
  */
-export class SemanticMemoryStorage implements LearningStorage {
-  private config: StorageConfig;
+async function getLanceDb(vectorDir: string): Promise<lancedb.Connection> {
+  // Return cached instance if available
+  const cachedInstance = lanceDbInstances.get(vectorDir);
+  if (cachedInstance) {
+    return cachedInstance;
+  }
+
+  // Return pending promise if initialization is in progress
+  const pendingPromise = lanceDbInitPromises.get(vectorDir);
+  if (pendingPromise) {
+    return pendingPromise;
+  }
+
+  // Create new initialization promise
+  const initPromise = initializeLanceDb(vectorDir);
+  lanceDbInitPromises.set(vectorDir, initPromise);
+
+  try {
+    const instance = await initPromise;
+    lanceDbInstances.set(vectorDir, instance);
+    return instance;
+  } finally {
+    // Clean up pending promise once resolved/rejected
+    lanceDbInitPromises.delete(vectorDir);
+  }
+}
+
+/**
+ * Initialize the LanceDB connection
+ */
+async function initializeLanceDb(
+  vectorDir: string,
+): Promise<lancedb.Connection> {
+  try {
+    // Ensure vector directory exists
+    if (!existsSync(vectorDir)) {
+      mkdirSync(vectorDir, { recursive: true });
+    }
+
+    console.log(`[storage] Connecting to LanceDB at ${vectorDir}`);
+    const db = await lancedb.connect(vectorDir);
+    console.log("[storage] LanceDB connection established");
+    return db;
+  } catch (error) {
+    const err = error as Error;
+    console.error(`[storage] Failed to initialize LanceDB: ${err.message}`);
+    throw new Error(`LanceDB initialization failed: ${err.message}`);
+  }
+}
+
+/**
+ * LanceDB-backed storage with vector search
+ *
+ * Uses LanceDB for persistent vector storage with semantic search.
+ * Data is stored in .hive/vectors/ with embeddings for similarity search.
+ */
+export class LanceDBStorage implements LearningStorage {
+  private vectorDir: string;
 
   constructor(config: Partial<StorageConfig> = {}) {
-    this.config = { ...DEFAULT_STORAGE_CONFIG, ...config };
+    const fullConfig = { ...DEFAULT_STORAGE_CONFIG, ...config };
+    this.vectorDir = fullConfig.vectorDir || ".hive/vectors";
   }
 
   // -------------------------------------------------------------------------
-  // Helpers
+  // Table Initialization
   // -------------------------------------------------------------------------
 
-  private async store(
-    collection: string,
-    data: unknown,
-    metadata?: Record<string, unknown>,
-  ): Promise<void> {
-    const content = typeof data === "string" ? data : JSON.stringify(data);
-    const args = ["store", content, "--collection", collection];
-
-    if (metadata) {
-      args.push("--metadata", JSON.stringify(metadata));
+  /**
+   * Get or create a table, inserting data if the table needs to be created.
+   * 
+   * @param tableName - Name of the table
+   * @param data - Data to insert. If table doesn't exist, creates it with this data.
+   *               If table exists, adds this data to it.
+   * @returns The table (data already inserted)
+   */
+  private async ensureTableAndAdd<T extends Record<string, unknown>>(
+    tableName: string,
+    data: T,
+  ): Promise<lancedb.Table> {
+    const db = await getLanceDb(this.vectorDir);
+    
+    // Get or create the set of initialized tables for this directory
+    if (!initializedTables.has(this.vectorDir)) {
+      initializedTables.set(this.vectorDir, new Set<string>());
     }
+    const dirTables = initializedTables.get(this.vectorDir)!;
 
-    await execSemanticMemory(args);
-  }
-
-  private async find<T>(
-    collection: string,
-    query: string,
-    limit: number = 10,
-    useFts: boolean = false,
-  ): Promise<T[]> {
-    const args = [
-      "find",
-      query,
-      "--collection",
-      collection,
-      "--limit",
-      String(limit),
-      "--json",
-    ];
-
-    if (useFts) {
-      args.push("--fts");
-    }
-
-    const result = await execSemanticMemory(args);
-
-    if (result.exitCode !== 0) {
-      console.warn(
-        `[storage] semantic-memory find() failed with exit code ${result.exitCode}: ${result.stderr.toString().trim()}`,
-      );
-      return [];
+    // Check if table already initialized in this session
+    if (dirTables.has(tableName)) {
+      const table = await db.openTable(tableName);
+      await table.add([data]);
+      return table;
     }
 
     try {
-      const output = result.stdout.toString().trim();
-      if (!output) return [];
-
-      const parsed = JSON.parse(output);
-      // semantic-memory returns { results: [...] } or just [...]
-      const results = Array.isArray(parsed) ? parsed : parsed.results || [];
-
-      // Extract the stored content from each result
-      return results.map((r: { content?: string; information?: string }) => {
-        const content = r.content || r.information || "";
-        try {
-          return JSON.parse(content);
-        } catch {
-          return content;
-        }
-      });
-    } catch (error) {
-      console.warn(
-        `[storage] Failed to parse semantic-memory find() output: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return [];
+      // Try to open existing table and add data
+      const table = await db.openTable(tableName);
+      dirTables.add(tableName);
+      await table.add([data]);
+      return table;
+    } catch {
+      // Table doesn't exist, create it with the data
+      console.log(`[storage] Creating table: ${tableName}`);
+      const table = await db.createTable(tableName, [data]);
+      dirTables.add(tableName);
+      return table;
     }
   }
 
-  private async list<T>(collection: string): Promise<T[]> {
-    const result = await execSemanticMemory([
-      "list",
-      "--collection",
-      collection,
-      "--json",
-    ]);
+  /**
+   * Get a table for reading (returns null if table doesn't exist)
+   */
+  private async getTable(tableName: string): Promise<lancedb.Table | null> {
+    const db = await getLanceDb(this.vectorDir);
+    
+    if (!initializedTables.has(this.vectorDir)) {
+      initializedTables.set(this.vectorDir, new Set<string>());
+    }
+    const dirTables = initializedTables.get(this.vectorDir)!;
 
-    if (result.exitCode !== 0) {
-      console.warn(
-        `[storage] semantic-memory list() failed with exit code ${result.exitCode}: ${result.stderr.toString().trim()}`,
-      );
-      return [];
+    if (dirTables.has(tableName)) {
+      return await db.openTable(tableName);
     }
 
     try {
-      const output = result.stdout.toString().trim();
-      if (!output) return [];
-
-      const parsed = JSON.parse(output);
-      const items = Array.isArray(parsed) ? parsed : parsed.items || [];
-
-      return items.map((item: { content?: string; information?: string }) => {
-        const content = item.content || item.information || "";
-        try {
-          return JSON.parse(content);
-        } catch {
-          return content;
-        }
-      });
-    } catch (error) {
-      console.warn(
-        `[storage] Failed to parse semantic-memory list() output: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return [];
+      const table = await db.openTable(tableName);
+      dirTables.add(tableName);
+      return table;
+    } catch {
+      return null;
     }
   }
 
@@ -322,47 +256,116 @@ export class SemanticMemoryStorage implements LearningStorage {
   // -------------------------------------------------------------------------
 
   async storeFeedback(event: FeedbackEvent): Promise<void> {
-    await this.store(this.config.collections.feedback, event, {
+    // Create embedding from feedback content
+    const content = `${event.criterion} ${event.type} ${event.context || ""}`;
+    const vector = await embed(content);
+
+    const row = {
+      id: event.id,
+      vector,
       criterion: event.criterion,
       type: event.type,
-      bead_id: event.bead_id || "",
       timestamp: event.timestamp,
-    });
+      context: event.context || "",
+      bead_id: event.bead_id || "",
+      raw_value: event.raw_value,
+    };
+
+    await this.ensureTableAndAdd("feedback", row);
   }
 
   async getFeedbackByCriterion(criterion: string): Promise<FeedbackEvent[]> {
-    // Use FTS for exact criterion match
-    return this.find<FeedbackEvent>(
-      this.config.collections.feedback,
-      criterion,
-      100,
-      true, // FTS for exact match
-    );
+    const table = await this.getTable("feedback");
+    if (!table) return [];
+
+    try {
+      const results = await table
+        .query()
+        .where(`criterion = '${criterion}'`)
+        .toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        criterion: r.criterion,
+        type: r.type,
+        timestamp: r.timestamp,
+        context: r.context || undefined,
+        bead_id: r.bead_id || undefined,
+        raw_value: r.raw_value,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getFeedbackByBead(beadId: string): Promise<FeedbackEvent[]> {
-    return this.find<FeedbackEvent>(
-      this.config.collections.feedback,
-      beadId,
-      100,
-      true,
-    );
+    const table = await this.getTable("feedback");
+    if (!table) return [];
+
+    try {
+      const results = await table
+        .query()
+        .where(`bead_id = '${beadId}'`)
+        .toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        criterion: r.criterion,
+        type: r.type,
+        timestamp: r.timestamp,
+        context: r.context || undefined,
+        bead_id: r.bead_id || undefined,
+        raw_value: r.raw_value,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getAllFeedback(): Promise<FeedbackEvent[]> {
-    return this.list<FeedbackEvent>(this.config.collections.feedback);
+    const table = await this.getTable("feedback");
+    if (!table) return [];
+
+    try {
+      const results = await table.query().toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        criterion: r.criterion,
+        type: r.type,
+        timestamp: r.timestamp,
+        context: r.context || undefined,
+        bead_id: r.bead_id || undefined,
+        raw_value: r.raw_value,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async findSimilarFeedback(
     query: string,
     limit: number = 10,
   ): Promise<FeedbackEvent[]> {
-    return this.find<FeedbackEvent>(
-      this.config.collections.feedback,
-      query,
-      limit,
-      !this.config.useSemanticSearch,
-    );
+    const table = await this.getTable("feedback");
+    if (!table) return [];
+
+    try {
+      const queryVector = await embed(query);
+      const results = await table.vectorSearch(queryVector).limit(limit).toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        criterion: r.criterion,
+        type: r.type,
+        timestamp: r.timestamp,
+        context: r.context || undefined,
+        bead_id: r.bead_id || undefined,
+        raw_value: r.raw_value,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -370,51 +373,179 @@ export class SemanticMemoryStorage implements LearningStorage {
   // -------------------------------------------------------------------------
 
   async storePattern(pattern: DecompositionPattern): Promise<void> {
-    await this.store(this.config.collections.patterns, pattern, {
+    // Create embedding from pattern content and tags
+    const content = `${pattern.content} ${pattern.tags.join(" ")} ${pattern.reason || ""}`;
+    const vector = await embed(content);
+
+    const row = {
       id: pattern.id,
+      vector,
+      content: pattern.content,
       kind: pattern.kind,
       is_negative: pattern.is_negative,
+      success_count: pattern.success_count,
+      failure_count: pattern.failure_count,
+      created_at: pattern.created_at,
+      updated_at: pattern.updated_at,
+      reason: pattern.reason || "",
       tags: pattern.tags.join(","),
-    });
+      example_beads: pattern.example_beads.join(","),
+    };
+
+    await this.ensureTableAndAdd("patterns", row);
   }
 
   async getPattern(id: string): Promise<DecompositionPattern | null> {
-    // List all and filter by ID - FTS search by ID is unreliable
-    const all = await this.list<DecompositionPattern>(
-      this.config.collections.patterns,
-    );
-    return all.find((p) => p.id === id) || null;
+    const table = await this.getTable("patterns");
+    if (!table) return null;
+
+    try {
+      const results = await table.query().where(`id = '${id}'`).limit(1).toArray();
+
+      if (results.length === 0) {
+        return null;
+      }
+
+      const r = results[0] as any;
+      return {
+        id: r.id,
+        content: r.content,
+        kind: r.kind,
+        is_negative: r.is_negative,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        reason: r.reason || undefined,
+        tags: r.tags ? r.tags.split(",").filter((t: string) => t) : [],
+        example_beads: r.example_beads
+          ? r.example_beads.split(",").filter((b: string) => b)
+          : [],
+      };
+    } catch {
+      return null;
+    }
   }
 
   async getAllPatterns(): Promise<DecompositionPattern[]> {
-    return this.list<DecompositionPattern>(this.config.collections.patterns);
+    const table = await this.getTable("patterns");
+    if (!table) return [];
+
+    try {
+      const results = await table.query().toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        content: r.content,
+        kind: r.kind,
+        is_negative: r.is_negative,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        reason: r.reason || undefined,
+        tags: r.tags ? r.tags.split(",").filter((t: string) => t) : [],
+        example_beads: r.example_beads
+          ? r.example_beads.split(",").filter((b: string) => b)
+          : [],
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getAntiPatterns(): Promise<DecompositionPattern[]> {
-    const all = await this.getAllPatterns();
-    return all.filter((p) => p.kind === "anti_pattern");
+    const table = await this.getTable("patterns");
+    if (!table) return [];
+
+    try {
+      const results = await table
+        .query()
+        .where("kind = 'anti_pattern'")
+        .toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        content: r.content,
+        kind: r.kind,
+        is_negative: r.is_negative,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        reason: r.reason || undefined,
+        tags: r.tags ? r.tags.split(",").filter((t: string) => t) : [],
+        example_beads: r.example_beads
+          ? r.example_beads.split(",").filter((b: string) => b)
+          : [],
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getPatternsByTag(tag: string): Promise<DecompositionPattern[]> {
-    const results = await this.find<DecompositionPattern>(
-      this.config.collections.patterns,
-      tag,
-      100,
-      true,
-    );
-    return results.filter((p) => p.tags.includes(tag));
+    const table = await this.getTable("patterns");
+    if (!table) return [];
+
+    try {
+      const results = await table.query().toArray();
+
+      // Filter by tag in-memory (LanceDB doesn't have LIKE for arrays)
+      return results
+        .filter((r: any) => {
+          const tags = r.tags ? r.tags.split(",") : [];
+          return tags.includes(tag);
+        })
+        .map((r: any) => ({
+          id: r.id,
+          content: r.content,
+          kind: r.kind,
+          is_negative: r.is_negative,
+          success_count: r.success_count,
+          failure_count: r.failure_count,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          reason: r.reason || undefined,
+          tags: r.tags ? r.tags.split(",").filter((t: string) => t) : [],
+          example_beads: r.example_beads
+            ? r.example_beads.split(",").filter((b: string) => b)
+            : [],
+        }));
+    } catch {
+      return [];
+    }
   }
 
   async findSimilarPatterns(
     query: string,
     limit: number = 10,
   ): Promise<DecompositionPattern[]> {
-    return this.find<DecompositionPattern>(
-      this.config.collections.patterns,
-      query,
-      limit,
-      !this.config.useSemanticSearch,
-    );
+    const table = await this.getTable("patterns");
+    if (!table) return [];
+
+    try {
+      const queryVector = await embed(query);
+      const results = await table.vectorSearch(queryVector).limit(limit).toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        content: r.content,
+        kind: r.kind,
+        is_negative: r.is_negative,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        reason: r.reason || undefined,
+        tags: r.tags ? r.tags.split(",").filter((t: string) => t) : [],
+        example_beads: r.example_beads
+          ? r.example_beads.split(",").filter((b: string) => b)
+          : [],
+      }));
+    } catch {
+      return [];
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -422,162 +553,367 @@ export class SemanticMemoryStorage implements LearningStorage {
   // -------------------------------------------------------------------------
 
   async storeMaturity(maturity: PatternMaturity): Promise<void> {
-    await this.store(this.config.collections.maturity, maturity, {
+    const row = {
       pattern_id: maturity.pattern_id,
       state: maturity.state,
-    });
+      helpful_count: maturity.helpful_count,
+      harmful_count: maturity.harmful_count,
+      last_validated: maturity.last_validated,
+      promoted_at: maturity.promoted_at || "",
+      deprecated_at: maturity.deprecated_at || "",
+    };
+
+    await this.ensureTableAndAdd("maturity", row);
   }
 
   async getMaturity(patternId: string): Promise<PatternMaturity | null> {
-    // List all and filter by pattern_id - FTS search by ID is unreliable
-    const all = await this.list<PatternMaturity>(
-      this.config.collections.maturity,
-    );
-    return all.find((m) => m.pattern_id === patternId) || null;
+    try {
+      const table = await this.getTable("maturity");
+      if (!table) return null;
+
+      const results = await table
+        .query()
+        .where(`pattern_id = '${patternId}'`)
+        .limit(1)
+        .toArray();
+
+      if (results.length === 0) {
+        return null;
+      }
+
+      const r = results[0] as any;
+      return {
+        pattern_id: r.pattern_id,
+        state: r.state,
+        helpful_count: r.helpful_count,
+        harmful_count: r.harmful_count,
+        last_validated: r.last_validated,
+        promoted_at: r.promoted_at || undefined,
+        deprecated_at: r.deprecated_at || undefined,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async getAllMaturity(): Promise<PatternMaturity[]> {
-    return this.list<PatternMaturity>(this.config.collections.maturity);
+    try {
+      const table = await this.getTable("maturity");
+      if (!table) return [];
+
+      const results = await table.query().toArray();
+
+      return results.map((r: any) => ({
+        pattern_id: r.pattern_id,
+        state: r.state,
+        helpful_count: r.helpful_count,
+        harmful_count: r.harmful_count,
+        last_validated: r.last_validated,
+        promoted_at: r.promoted_at || undefined,
+        deprecated_at: r.deprecated_at || undefined,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getMaturityByState(state: string): Promise<PatternMaturity[]> {
-    const all = await this.getAllMaturity();
-    return all.filter((m) => m.state === state);
+    try {
+      const table = await this.getTable("maturity");
+      if (!table) return [];
+
+      const results = await table.query().where(`state = '${state}'`).toArray();
+
+      return results.map((r: any) => ({
+        pattern_id: r.pattern_id,
+        state: r.state,
+        helpful_count: r.helpful_count,
+        harmful_count: r.harmful_count,
+        last_validated: r.last_validated,
+        promoted_at: r.promoted_at || undefined,
+        deprecated_at: r.deprecated_at || undefined,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async storeMaturityFeedback(feedback: MaturityFeedback): Promise<void> {
-    await this.store(this.config.collections.maturity + "-feedback", feedback, {
+    const row = {
+      id: `${feedback.pattern_id}-${feedback.timestamp}`,
       pattern_id: feedback.pattern_id,
       type: feedback.type,
       timestamp: feedback.timestamp,
-    });
+      weight: feedback.weight,
+    };
+
+    await this.ensureTableAndAdd("maturity-feedback", row);
   }
 
   async getMaturityFeedback(patternId: string): Promise<MaturityFeedback[]> {
-    // List all and filter by pattern_id - FTS search by ID is unreliable
-    const all = await this.list<MaturityFeedback>(
-      this.config.collections.maturity + "-feedback",
-    );
-    return all.filter((f) => f.pattern_id === patternId);
+    try {
+      const table = await this.getTable("maturity-feedback");
+      if (!table) return [];
+
+      const results = await table
+        .query()
+        .where(`pattern_id = '${patternId}'`)
+        .toArray();
+
+      return results.map((r: any) => ({
+        pattern_id: r.pattern_id,
+        type: r.type,
+        timestamp: r.timestamp,
+        weight: r.weight,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Strike Operations
+  // -------------------------------------------------------------------------
+
+  async storeStrike(record: StrikeRecord): Promise<void> {
+    const row = {
+      bead_id: record.bead_id,
+      strike_count: record.strike_count,
+      failures: JSON.stringify(record.failures),
+      first_strike_at: record.first_strike_at || "",
+      last_strike_at: record.last_strike_at || "",
+    };
+
+    await this.ensureTableAndAdd("strikes", row);
+  }
+
+  async getStrike(beadId: string): Promise<StrikeRecord | null> {
+    try {
+      const table = await this.getTable("strikes");
+      if (!table) return null;
+
+      const results = await table
+        .query()
+        .where(`bead_id = '${beadId}'`)
+        .toArray();
+
+      if (results.length === 0) {
+        return null;
+      }
+
+      // Find the most recent record by last_strike_at
+      let mostRecent = results[0] as any;
+      for (const r of results) {
+        if ((r as any).last_strike_at > mostRecent.last_strike_at) {
+          mostRecent = r;
+        }
+      }
+
+      const r = mostRecent;
+      // If strike_count is 0, treat as cleared (return null)
+      if (r.strike_count === 0) {
+        return null;
+      }
+      
+      return {
+        bead_id: r.bead_id,
+        strike_count: r.strike_count,
+        failures: JSON.parse(r.failures),
+        first_strike_at: r.first_strike_at || undefined,
+        last_strike_at: r.last_strike_at || undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async getAllStrikes(): Promise<StrikeRecord[]> {
+    try {
+      const table = await this.getTable("strikes");
+      if (!table) return [];
+
+      const results = await table.query().toArray();
+
+      // Group by bead_id and keep only the most recent for each
+      const byBead = new Map<string, any>();
+      for (const r of results) {
+        const existing = byBead.get(r.bead_id);
+        if (!existing || r.last_strike_at > existing.last_strike_at) {
+          byBead.set(r.bead_id, r);
+        }
+      }
+
+      return Array.from(byBead.values()).map((r: any) => ({
+        bead_id: r.bead_id,
+        strike_count: r.strike_count,
+        failures: JSON.parse(r.failures),
+        first_strike_at: r.first_strike_at || undefined,
+        last_strike_at: r.last_strike_at || undefined,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async clearStrike(beadId: string): Promise<void> {
+    // Store an empty strike record with current timestamp to effectively clear it
+    // The current timestamp ensures this record is considered "most recent"
+    const now = new Date().toISOString();
+    const emptyRecord: StrikeRecord = {
+      bead_id: beadId,
+      strike_count: 0,
+      failures: [],
+      first_strike_at: undefined,
+      last_strike_at: now, // Set timestamp so this is the "most recent" record
+    };
+    
+    await this.storeStrike(emptyRecord);
+  }
+
+  // -------------------------------------------------------------------------
+  // Error Operations
+  // -------------------------------------------------------------------------
+
+  async storeError(entry: ErrorEntry): Promise<void> {
+    const row = {
+      id: entry.id,
+      bead_id: entry.bead_id,
+      error_type: entry.error_type,
+      message: entry.message,
+      stack_trace: entry.stack_trace || "",
+      tool_name: entry.tool_name || "",
+      timestamp: entry.timestamp,
+      resolved: entry.resolved,
+      context: entry.context || "",
+    };
+
+    await this.ensureTableAndAdd("errors", row);
+  }
+
+  async getErrorsByBead(beadId: string): Promise<ErrorEntry[]> {
+    try {
+      const table = await this.getTable("errors");
+      if (!table) return [];
+
+      const results = await table
+        .query()
+        .where(`bead_id = '${beadId}'`)
+        .toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        bead_id: r.bead_id,
+        error_type: r.error_type,
+        message: r.message,
+        stack_trace: r.stack_trace || undefined,
+        tool_name: r.tool_name || undefined,
+        timestamp: r.timestamp,
+        resolved: r.resolved,
+        context: r.context || undefined,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async getUnresolvedErrorsByBead(beadId: string): Promise<ErrorEntry[]> {
+    try {
+      const table = await this.getTable("errors");
+      if (!table) return [];
+
+      const results = await table
+        .query()
+        .where(`bead_id = '${beadId}' AND resolved = false`)
+        .toArray();
+
+      return results.map((r: any) => ({
+        id: r.id,
+        bead_id: r.bead_id,
+        error_type: r.error_type,
+        message: r.message,
+        stack_trace: r.stack_trace || undefined,
+        tool_name: r.tool_name || undefined,
+        timestamp: r.timestamp,
+        resolved: r.resolved,
+        context: r.context || undefined,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async markErrorResolved(id: string): Promise<void> {
+    // LanceDB doesn't support updates, so we need to read all errors,
+    // update the one we want, and rewrite the table
+    try {
+      const table = await this.getTable("errors");
+      if (!table) return;
+
+      // Get all errors
+      const allErrors = await table.query().toArray();
+      
+      // Find and update the specific error
+      const updatedErrors = allErrors.map((r: any) => {
+        if (r.id === id) {
+          return { ...r, resolved: true };
+        }
+        return r;
+      });
+
+      // Add the updated record (new version with resolved=true)
+      const errorToUpdate = allErrors.find((r: any) => r.id === id);
+      if (errorToUpdate) {
+        await table.add([{ ...errorToUpdate, resolved: true }]);
+      }
+    } catch (error) {
+      console.error(`[storage] Failed to mark error ${id} as resolved:`, error);
+    }
+  }
+
+  async getAllErrors(): Promise<ErrorEntry[]> {
+    try {
+      const table = await this.getTable("errors");
+      if (!table) return [];
+
+      const results = await table.query().toArray();
+
+      // Group by id and keep only the most recent for each (for resolved updates)
+      const byId = new Map<string, any>();
+      for (const r of results) {
+        const existing = byId.get(r.id);
+        if (!existing || r.timestamp >= existing.timestamp) {
+          byId.set(r.id, r);
+        }
+      }
+
+      return Array.from(byId.values()).map((r: any) => ({
+        id: r.id,
+        bead_id: r.bead_id,
+        error_type: r.error_type,
+        message: r.message,
+        stack_trace: r.stack_trace || undefined,
+        tool_name: r.tool_name || undefined,
+        timestamp: r.timestamp,
+        resolved: r.resolved,
+        context: r.context || undefined,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async close(): Promise<void> {
-    // No cleanup needed for CLI-based storage
+    // Close and remove the LanceDB connection for this directory
+    const connection = lanceDbInstances.get(this.vectorDir);
+    if (connection) {
+      // LanceDB connections don't have explicit close, but we remove from cache
+      lanceDbInstances.delete(this.vectorDir);
+      initializedTables.delete(this.vectorDir);
+    }
   }
 }
 
-// ============================================================================
-// In-Memory Storage Implementation
-// ============================================================================
 
-/**
- * In-memory storage adapter
- *
- * Wraps the existing in-memory implementations into the unified interface.
- * Useful for testing and ephemeral sessions.
- */
-export class InMemoryStorage implements LearningStorage {
-  private feedback: InMemoryFeedbackStorage;
-  private patterns: InMemoryPatternStorage;
-  private maturity: InMemoryMaturityStorage;
-
-  constructor() {
-    this.feedback = new InMemoryFeedbackStorage();
-    this.patterns = new InMemoryPatternStorage();
-    this.maturity = new InMemoryMaturityStorage();
-  }
-
-  // Feedback
-  async storeFeedback(event: FeedbackEvent): Promise<void> {
-    return this.feedback.store(event);
-  }
-
-  async getFeedbackByCriterion(criterion: string): Promise<FeedbackEvent[]> {
-    return this.feedback.getByCriterion(criterion);
-  }
-
-  async getFeedbackByBead(beadId: string): Promise<FeedbackEvent[]> {
-    return this.feedback.getByBead(beadId);
-  }
-
-  async getAllFeedback(): Promise<FeedbackEvent[]> {
-    return this.feedback.getAll();
-  }
-
-  async findSimilarFeedback(
-    query: string,
-    limit: number = 10,
-  ): Promise<FeedbackEvent[]> {
-    // In-memory doesn't support semantic search, filter by query string match
-    const all = await this.feedback.getAll();
-    const lowerQuery = query.toLowerCase();
-    const filtered = all.filter(
-      (event) =>
-        event.criterion.toLowerCase().includes(lowerQuery) ||
-        (event.bead_id && event.bead_id.toLowerCase().includes(lowerQuery)) ||
-        (event.context && event.context.toLowerCase().includes(lowerQuery)),
-    );
-    return filtered.slice(0, limit);
-  }
-
-  // Patterns
-  async storePattern(pattern: DecompositionPattern): Promise<void> {
-    return this.patterns.store(pattern);
-  }
-
-  async getPattern(id: string): Promise<DecompositionPattern | null> {
-    return this.patterns.get(id);
-  }
-
-  async getAllPatterns(): Promise<DecompositionPattern[]> {
-    return this.patterns.getAll();
-  }
-
-  async getAntiPatterns(): Promise<DecompositionPattern[]> {
-    return this.patterns.getAntiPatterns();
-  }
-
-  async getPatternsByTag(tag: string): Promise<DecompositionPattern[]> {
-    return this.patterns.getByTag(tag);
-  }
-
-  async findSimilarPatterns(
-    query: string,
-    limit: number = 10,
-  ): Promise<DecompositionPattern[]> {
-    const results = await this.patterns.findByContent(query);
-    return results.slice(0, limit);
-  }
-
-  // Maturity
-  async storeMaturity(maturity: PatternMaturity): Promise<void> {
-    return this.maturity.store(maturity);
-  }
-
-  async getMaturity(patternId: string): Promise<PatternMaturity | null> {
-    return this.maturity.get(patternId);
-  }
-
-  async getAllMaturity(): Promise<PatternMaturity[]> {
-    return this.maturity.getAll();
-  }
-
-  async getMaturityByState(state: string): Promise<PatternMaturity[]> {
-    return this.maturity.getByState(state as any);
-  }
-
-  async storeMaturityFeedback(feedback: MaturityFeedback): Promise<void> {
-    return this.maturity.storeFeedback(feedback);
-  }
-
-  async getMaturityFeedback(patternId: string): Promise<MaturityFeedback[]> {
-    return this.maturity.getFeedback(patternId);
-  }
-
-  async close(): Promise<void> {
-    // No cleanup needed
-  }
-}
 
 // ============================================================================
 // Factory
@@ -586,86 +922,24 @@ export class InMemoryStorage implements LearningStorage {
 /**
  * Create a storage instance
  *
- * @param config - Storage configuration (default: semantic-memory)
- * @returns Configured storage instance
+ * @param config - Storage configuration
+ * @returns LanceDB storage instance
  *
  * @example
  * ```typescript
- * // Default semantic-memory storage
+ * // Default LanceDB storage
  * const storage = createStorage();
  *
- * // In-memory for testing
- * const storage = createStorage({ backend: "memory" });
- *
- * // Custom collections
+ * // Custom vector directory
  * const storage = createStorage({
- *   backend: "semantic-memory",
- *   collections: {
- *     feedback: "my-project-feedback",
- *     patterns: "my-project-patterns",
- *     maturity: "my-project-maturity",
- *   },
+ *   vectorDir: ".custom-vectors",
  * });
  * ```
  */
 export function createStorage(
   config: Partial<StorageConfig> = {},
 ): LearningStorage {
-  const fullConfig = { ...DEFAULT_STORAGE_CONFIG, ...config };
-
-  switch (fullConfig.backend) {
-    case "semantic-memory":
-      return new SemanticMemoryStorage(fullConfig);
-    case "memory":
-      return new InMemoryStorage();
-    default:
-      throw new Error(`Unknown storage backend: ${fullConfig.backend}`);
-  }
-}
-
-/**
- * Check if semantic-memory is available (native or via bunx)
- */
-export async function isSemanticMemoryAvailable(): Promise<boolean> {
-  try {
-    const result = await execSemanticMemory(["stats"]);
-    return result.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Get the resolved semantic-memory command (for debugging/logging)
- */
-export async function getResolvedCommand(): Promise<string[]> {
-  return resolveSemanticMemoryCommand();
-}
-
-/**
- * Create storage with automatic fallback
- *
- * Uses semantic-memory if available, otherwise falls back to in-memory.
- *
- * @param config - Storage configuration
- * @returns Storage instance
- */
-export async function createStorageWithFallback(
-  config: Partial<StorageConfig> = {},
-): Promise<LearningStorage> {
-  if (config.backend === "memory") {
-    return new InMemoryStorage();
-  }
-
-  const available = await isSemanticMemoryAvailable();
-  if (available) {
-    return new SemanticMemoryStorage(config);
-  }
-
-  console.warn(
-    "semantic-memory not available, falling back to in-memory storage",
-  );
-  return new InMemoryStorage();
+  return new LanceDBStorage(config);
 }
 
 // ============================================================================
@@ -673,22 +947,18 @@ export async function createStorageWithFallback(
 // ============================================================================
 
 let globalStorage: LearningStorage | null = null;
-let globalStoragePromise: Promise<LearningStorage> | null = null;
 
 /**
  * Get or create the global storage instance
  *
- * Uses semantic-memory by default, with automatic fallback to in-memory.
- * Prevents race conditions by storing the initialization promise.
+ * Uses LanceDB by default.
+ * Creates a new instance on first call, then returns cached instance.
  */
-export async function getStorage(): Promise<LearningStorage> {
-  if (!globalStoragePromise) {
-    globalStoragePromise = createStorageWithFallback().then((storage) => {
-      globalStorage = storage;
-      return storage;
-    });
+export function getStorage(): LearningStorage {
+  if (!globalStorage) {
+    globalStorage = createStorage();
   }
-  return globalStoragePromise;
+  return globalStorage;
 }
 
 /**
@@ -698,7 +968,6 @@ export async function getStorage(): Promise<LearningStorage> {
  */
 export function setStorage(storage: LearningStorage): void {
   globalStorage = storage;
-  globalStoragePromise = Promise.resolve(storage);
 }
 
 /**
@@ -709,5 +978,4 @@ export async function resetStorage(): Promise<void> {
     await globalStorage.close();
     globalStorage = null;
   }
-  globalStoragePromise = null;
 }

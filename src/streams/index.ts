@@ -367,8 +367,7 @@ export async function resetDatabase(projectPath?: string): Promise<void> {
  * - agents: Materialized view of registered agents
  * - messages: Materialized view of messages
  * - reservations: Materialized view of file reservations
- * - cursors, deferred: Effect-TS durable primitives (via migrations)
- * - locks: Distributed mutual exclusion (DurableLock)
+ * - cursors, deferred, locks: Effect-TS durable primitives (via migrations)
  */
 async function initializeSchema(db: PGlite): Promise<void> {
   // Create core event store tables
@@ -450,21 +449,9 @@ async function initializeSchema(db: PGlite): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_reservations_agent ON reservations(agent_name);
     CREATE INDEX IF NOT EXISTS idx_reservations_expires ON reservations(expires_at);
     CREATE INDEX IF NOT EXISTS idx_reservations_active ON reservations(project_key, released_at) WHERE released_at IS NULL;
-
-    -- Locks table for distributed mutual exclusion (DurableLock)
-    CREATE TABLE IF NOT EXISTS locks (
-      resource TEXT PRIMARY KEY,
-      holder TEXT NOT NULL,
-      seq INTEGER NOT NULL DEFAULT 0,
-      acquired_at BIGINT NOT NULL,
-      expires_at BIGINT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_locks_expires ON locks(expires_at);
-    CREATE INDEX IF NOT EXISTS idx_locks_holder ON locks(holder);
   `);
 
-  // Run schema migrations for Effect-TS durable primitives (cursors, deferred)
+  // Run schema migrations for Effect-TS durable primitives (cursors, deferred, locks)
   const { runMigrations } = await import("./migrations");
   await runMigrations(db);
 }

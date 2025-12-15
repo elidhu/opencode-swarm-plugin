@@ -45,8 +45,6 @@ import {
   ErrorAccumulator,
   type ErrorType,
   type FeedbackEvent,
-  formatMemoryStoreOn3Strike,
-  formatMemoryStoreOnSuccess,
   getArchitecturePrompt,
   getStrikes,
   InMemoryStrikeStorage,
@@ -58,6 +56,7 @@ import {
   scoreImplicitFeedback,
   type StrikeStorage,
 } from "./learning";
+import { getStorage } from "./storage";
 import {
   checkAllTools,
   formatToolAvailability,
@@ -478,8 +477,21 @@ export const hive_init = tool({
       degradedFeatures.push("agent communication", "file reservations");
     }
 
-    if (!availability.get("semantic-memory")?.status.available) {
-      degradedFeatures.push("persistent learning (using in-memory fallback)");
+    // Check semantic memory storage (embedded LanceDB)
+    let storageHealthy = false;
+    let storageLocation = "";
+    try {
+      const storage = getStorage();
+      // Verify storage is working by trying to get all patterns
+      await storage.getAllPatterns();
+      storageHealthy = true;
+      storageLocation = ".hive/vectors";
+      console.log(`[hive] Storage healthy at ${storageLocation}`);
+    } catch (error) {
+      warnings.push(
+        `⚠️  semantic-memory storage not healthy: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      degradedFeatures.push("pattern learning", "semantic memory");
     }
 
     // Discover available skills
@@ -515,6 +527,11 @@ export const hive_init = tool({
             },
           ]),
         ),
+        storage: {
+          healthy: storageHealthy,
+          location: storageLocation || "unknown",
+          backend: "lancedb",
+        },
         skills: skillsInfo,
         warnings: warnings.length > 0 ? warnings : undefined,
         degraded_features:
@@ -527,6 +544,9 @@ export const hive_init = tool({
           hive_mail: hiveMailAvailable
             ? "✓ Hive Mail ready for coordination"
             : "Hive Mail will auto-initialize on first use",
+          storage: storageHealthy
+            ? `✓ Semantic memory ready at ${storageLocation}`
+            : "⚠️  Semantic memory not available - pattern learning disabled",
         },
         report,
       },
@@ -951,13 +971,38 @@ export const hive_complete = tool({
       importance: "normal",
     });
 
-    // Build success response with semantic-memory integration
+    // Store successful pattern in semantic memory
+    let memoryStored = false;
+    try {
+      const storage = getStorage();
+      await storage.storePattern({
+        id: `pattern-${args.bead_id}-${Date.now()}`,
+        content: `Task "${args.bead_id}" completed: ${args.summary}`,
+        kind: "pattern",
+        is_negative: false,
+        success_count: 1,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: args.files_touched || [],
+        example_beads: [args.bead_id],
+      });
+      memoryStored = true;
+      console.log(`[hive] Stored success pattern for ${args.bead_id}`);
+    } catch (error) {
+      console.warn(
+        `[hive] Failed to store success pattern: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    // Build success response with memory storage status
     const response = {
       success: true,
       bead_id: args.bead_id,
       closed: true,
       reservations_released: true,
       message_sent: true,
+      memory_stored: memoryStored,
       verification_gate: verificationResult
         ? {
             passed: true,
@@ -984,12 +1029,6 @@ Did you learn anything reusable during this subtask? Consider:
 If you discovered something valuable, use \`hive_learn\` or \`skills_create\` to preserve it as a skill for future hives.
 
 Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
-      // Add semantic-memory integration on success
-      memory_store: formatMemoryStoreOnSuccess(
-        args.bead_id,
-        args.summary,
-        args.files_touched || [],
-      ),
     };
 
     return JSON.stringify(response, null, 2);
@@ -1367,12 +1406,43 @@ export const hive_check_strikes = tool({
 
         const strikedOut = record.strike_count >= 3;
 
-        // Build response with memory storage hint on 3-strike
+        // Store anti-pattern on 3-strike
+        let memoryStored = false;
+        if (strikedOut) {
+          try {
+            const storage = getStorage();
+            const failuresList = record.failures
+              .map((f, i) => `${i + 1}. ${f.attempt} - Failed: ${f.reason}`)
+              .join("\n");
+            await storage.storePattern({
+              id: `anti-pattern-${args.bead_id}-${Date.now()}`,
+              content: `Architecture problem detected in ${args.bead_id}: Task failed after 3 attempts.\nAttempts:\n${failuresList}`,
+              kind: "anti_pattern",
+              is_negative: true,
+              success_count: 0,
+              failure_count: 3,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              tags: ["3-strike", "architecture-problem"],
+              example_beads: [args.bead_id],
+              reason: "3 consecutive failures indicate structural issue requiring human decision",
+            });
+            memoryStored = true;
+            console.log(`[hive] Stored anti-pattern for ${args.bead_id}`);
+          } catch (error) {
+            console.warn(
+              `[hive] Failed to store anti-pattern: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+
+        // Build response with memory storage status
         const response: Record<string, unknown> = {
           bead_id: args.bead_id,
           strike_count: record.strike_count,
           is_striked_out: strikedOut,
           failures: record.failures,
+          memory_stored: strikedOut ? memoryStored : undefined,
           message: strikedOut
             ? "⚠️ STRUCK OUT: 3 strikes reached. STOP and question the architecture."
             : `Strike ${record.strike_count} recorded. ${3 - record.strike_count} remaining.`,
@@ -1380,14 +1450,6 @@ export const hive_check_strikes = tool({
             ? "DO NOT attempt Fix #4. Call with action=get_prompt for architecture review."
             : undefined,
         };
-
-        // Add semantic-memory storage hint on 3-strike
-        if (strikedOut) {
-          response.memory_store = formatMemoryStoreOn3Strike(
-            args.bead_id,
-            record.failures,
-          );
-        }
 
         return JSON.stringify(response, null, 2);
       }

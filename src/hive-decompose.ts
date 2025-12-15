@@ -24,6 +24,7 @@ import {
   DECOMPOSITION_PROMPT,
   STRATEGY_DECOMPOSITION_PROMPT,
 } from "./hive-prompts";
+import { getStorage } from "./storage";
 
 // ============================================================================
 // Prompts imported from hive-prompts.ts (canonical location)
@@ -210,19 +211,27 @@ export const hive_decompose = tool({
       .describe("Additional context (codebase info, constraints, etc.)"),
   },
   async execute(args) {
-    const { formatMemoryQueryForDecomposition } = await import("./learning");
+    const storage = getStorage();
+    const pastLearnings = await storage.findSimilarPatterns(args.task, 3);
+
+    let learningsContext = "";
+    if (pastLearnings.length > 0) {
+      learningsContext = `## Past Learnings\n\nBased on similar past tasks, here are relevant patterns:\n\n${pastLearnings.map((p, i) => `${i + 1}. **${p.kind}**: ${p.content}${p.reason ? ` (${p.reason})` : ""}`).join("\n")}\n\n`;
+    }
 
     const contextSection = args.context
       ? `## Additional Context\n${args.context}`
       : "## Additional Context\n(none provided)";
 
-    const prompt = DECOMPOSITION_PROMPT.replace("{task}", args.task)
+    const basePrompt = DECOMPOSITION_PROMPT.replace("{task}", args.task)
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString())
       .replace("{context_section}", contextSection);
 
+    const fullPrompt = learningsContext + basePrompt;
+
     return JSON.stringify(
       {
-        prompt,
+        prompt: fullPrompt,
         expected_schema: "BeadTree",
         schema_hint: {
           epic: { title: "string", description: "string?" },
@@ -238,7 +247,8 @@ export const hive_decompose = tool({
         },
         validation_note:
           "Parse agent response as JSON and validate with BeadTreeSchema from schemas/bead.ts",
-        memory_query: formatMemoryQueryForDecomposition(args.task, 3),
+        memory_queried: true,
+        patterns_found: pastLearnings.length,
       },
       null,
       2,
@@ -425,9 +435,16 @@ export const hive_delegate_planning = tool({
   async execute(args) {
     const { selectStrategy, formatStrategyGuidelines } =
       await import("./hive-strategies");
-    const { formatMemoryQueryForDecomposition } = await import("./learning");
     const { listSkills, getSkillsContextForSwarm, findRelevantSkills } =
       await import("./skills");
+
+    const storage = getStorage();
+    const pastLearnings = await storage.findSimilarPatterns(args.task, 3);
+
+    let learningsContext = "";
+    if (pastLearnings.length > 0) {
+      learningsContext = `## Past Learnings\n\nBased on similar past tasks, here are relevant patterns:\n\n${pastLearnings.map((p, i) => `${i + 1}. **${p.kind}**: ${p.content}${p.reason ? ` (${p.reason})` : ""}`).join("\n")}\n\n`;
+    }
 
     let selectedStrategy: Exclude<DecompositionStrategy, "auto">;
     let strategyReasoning: string;
@@ -466,7 +483,7 @@ export const hive_delegate_planning = tool({
       ? `## Additional Context\n${args.context}`
       : "## Additional Context\n(none provided)";
 
-    const planningPrompt = STRATEGY_DECOMPOSITION_PROMPT.replace(
+    const basePlanningPrompt = STRATEGY_DECOMPOSITION_PROMPT.replace(
       "{task}",
       args.task,
     )
@@ -474,6 +491,8 @@ export const hive_delegate_planning = tool({
       .replace("{context_section}", contextSection)
       .replace("{skills_context}", skillsContext || "")
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString());
+
+    const planningPrompt = learningsContext + basePlanningPrompt;
 
     const subagentInstructions = `
 ## CRITICAL: Output Format
@@ -533,7 +552,8 @@ Now generate the BeadTree for the given task.`;
           "4. Create beads with beads_create_epic",
         ],
         skills: skillsInfo,
-        memory_query: formatMemoryQueryForDecomposition(args.task, 3),
+        memory_queried: true,
+        patterns_found: pastLearnings.length,
       },
       null,
       2,

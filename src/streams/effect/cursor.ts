@@ -96,26 +96,6 @@ export class DurableCursor extends Context.Tag("DurableCursor")<
 // ============================================================================
 
 /**
- * Initialize cursor table schema
- */
-async function initializeCursorSchema(projectPath?: string): Promise<void> {
-  const db = await getDatabase(projectPath);
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS cursors (
-      id SERIAL PRIMARY KEY,
-      stream TEXT NOT NULL,
-      checkpoint TEXT NOT NULL,
-      position BIGINT NOT NULL DEFAULT 0,
-      updated_at BIGINT NOT NULL,
-      UNIQUE(stream, checkpoint)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_cursors_stream ON cursors(stream);
-    CREATE INDEX IF NOT EXISTS idx_cursors_checkpoint ON cursors(checkpoint);
-  `);
-}
-
-/**
  * Load cursor position from database
  */
 async function loadCursorPosition(
@@ -123,7 +103,6 @@ async function loadCursorPosition(
   checkpoint: string,
   projectPath?: string,
 ): Promise<number> {
-  await initializeCursorSchema(projectPath);
   const db = await getDatabase(projectPath);
 
   const result = await db.query<{ position: string }>(

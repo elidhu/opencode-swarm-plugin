@@ -10,6 +10,7 @@
  * @see https://github.com/Dicklesworthstone/cass_memory_system/blob/main/src/outcome.ts
  */
 import { z } from "zod";
+import { getStorage, type LearningStorage } from "./storage";
 
 // ============================================================================
 // Schemas
@@ -489,40 +490,7 @@ export interface FeedbackStorage {
   getAll(): Promise<FeedbackEvent[]>;
 }
 
-/**
- * In-memory feedback storage (for testing and short-lived sessions)
- *
- * Uses LRU eviction to prevent unbounded memory growth.
- */
-export class InMemoryFeedbackStorage implements FeedbackStorage {
-  private events: FeedbackEvent[] = [];
-  private readonly maxSize: number;
 
-  constructor(maxSize: number = 10000) {
-    this.maxSize = maxSize;
-  }
-
-  async store(event: FeedbackEvent): Promise<void> {
-    this.events.push(event);
-
-    // Evict oldest events if we exceed max size (LRU)
-    if (this.events.length > this.maxSize) {
-      this.events = this.events.slice(this.events.length - this.maxSize);
-    }
-  }
-
-  async getByCriterion(criterion: string): Promise<FeedbackEvent[]> {
-    return this.events.filter((e) => e.criterion === criterion);
-  }
-
-  async getByBead(beadId: string): Promise<FeedbackEvent[]> {
-    return this.events.filter((e) => e.bead_id === beadId);
-  }
-
-  async getAll(): Promise<FeedbackEvent[]> {
-    return [...this.events];
-  }
-}
 
 // ============================================================================
 // 3-Strike Detection
@@ -582,7 +550,13 @@ export class InMemoryStrikeStorage implements StrikeStorage {
   }
 
   async get(beadId: string): Promise<StrikeRecord | null> {
-    return this.strikes.get(beadId) ?? null;
+    const record = this.strikes.get(beadId);
+    if (!record) return null;
+    // Return a deep copy to prevent mutation of stored data
+    return {
+      ...record,
+      failures: [...record.failures],
+    };
   }
 
   async getAll(): Promise<StrikeRecord[]> {
@@ -594,6 +568,8 @@ export class InMemoryStrikeStorage implements StrikeStorage {
   }
 }
 
+
+
 /**
  * Add a strike to a bead's record
  *
@@ -602,14 +578,14 @@ export class InMemoryStrikeStorage implements StrikeStorage {
  * @param beadId - Bead ID
  * @param attempt - Description of what was attempted
  * @param reason - Why it failed
- * @param storage - Strike storage (defaults to in-memory)
+ * @param storage - Strike storage (defaults to LanceDB via getStorage())
  * @returns Updated strike record
  */
 export async function addStrike(
   beadId: string,
   attempt: string,
   reason: string,
-  storage: StrikeStorage = new InMemoryStrikeStorage(),
+  storage: StrikeStorage = new LearningStrikeStorageAdapter(getStorage()),
 ): Promise<StrikeRecord> {
   const existing = await storage.get(beadId);
   const now = new Date().toISOString();
@@ -636,12 +612,12 @@ export async function addStrike(
  * Get strike count for a bead
  *
  * @param beadId - Bead ID
- * @param storage - Strike storage
+ * @param storage - Strike storage (defaults to LanceDB via getStorage())
  * @returns Strike count (0-3)
  */
 export async function getStrikes(
   beadId: string,
-  storage: StrikeStorage = new InMemoryStrikeStorage(),
+  storage: StrikeStorage = new LearningStrikeStorageAdapter(getStorage()),
 ): Promise<number> {
   const record = await storage.get(beadId);
   return record?.strike_count ?? 0;
@@ -651,12 +627,12 @@ export async function getStrikes(
  * Check if a bead has struck out (3 strikes)
  *
  * @param beadId - Bead ID
- * @param storage - Strike storage
+ * @param storage - Strike storage (defaults to LanceDB via getStorage())
  * @returns True if bead has 3 strikes
  */
 export async function isStrikedOut(
   beadId: string,
-  storage: StrikeStorage = new InMemoryStrikeStorage(),
+  storage: StrikeStorage = new LearningStrikeStorageAdapter(getStorage()),
 ): Promise<boolean> {
   const count = await getStrikes(beadId, storage);
   return count >= 3;
@@ -669,12 +645,12 @@ export async function isStrikedOut(
  * the human to question the architecture instead of attempting Fix #4.
  *
  * @param beadId - Bead ID
- * @param storage - Strike storage
+ * @param storage - Strike storage (defaults to LanceDB via getStorage())
  * @returns Architecture review prompt
  */
 export async function getArchitecturePrompt(
   beadId: string,
-  storage: StrikeStorage = new InMemoryStrikeStorage(),
+  storage: StrikeStorage = new LearningStrikeStorageAdapter(getStorage()),
 ): Promise<string> {
   const record = await storage.get(beadId);
 
@@ -712,11 +688,11 @@ This pattern suggests an **architectural problem**, not a bug.
  * Clear strikes for a bead (e.g., after successful fix)
  *
  * @param beadId - Bead ID
- * @param storage - Strike storage
+ * @param storage - Strike storage (defaults to LanceDB via getStorage())
  */
 export async function clearStrikes(
   beadId: string,
-  storage: StrikeStorage = new InMemoryStrikeStorage(),
+  storage: StrikeStorage = new LearningStrikeStorageAdapter(getStorage()),
 ): Promise<void> {
   await storage.clear(beadId);
 }
@@ -775,6 +751,62 @@ export class InMemoryErrorStorage implements ErrorStorage {
   }
 }
 
+// ============================================================================
+// LearningStorage Adapters
+// ============================================================================
+
+/**
+ * Adapter that wraps LearningStorage to implement StrikeStorage interface
+ */
+export class LearningStrikeStorageAdapter implements StrikeStorage {
+  constructor(private learningStorage: LearningStorage) {}
+
+  async store(record: StrikeRecord): Promise<void> {
+    return this.learningStorage.storeStrike(record);
+  }
+
+  async get(beadId: string): Promise<StrikeRecord | null> {
+    return this.learningStorage.getStrike(beadId);
+  }
+
+  async getAll(): Promise<StrikeRecord[]> {
+    return this.learningStorage.getAllStrikes();
+  }
+
+  async clear(beadId: string): Promise<void> {
+    return this.learningStorage.clearStrike(beadId);
+  }
+}
+
+/**
+ * Adapter that wraps LearningStorage to implement ErrorStorage interface
+ */
+export class LearningErrorStorageAdapter implements ErrorStorage {
+  constructor(private learningStorage: LearningStorage) {}
+
+  async store(entry: ErrorEntry): Promise<void> {
+    return this.learningStorage.storeError(entry);
+  }
+
+  async getByBead(beadId: string): Promise<ErrorEntry[]> {
+    return this.learningStorage.getErrorsByBead(beadId);
+  }
+
+  async getUnresolvedByBead(beadId: string): Promise<ErrorEntry[]> {
+    return this.learningStorage.getUnresolvedErrorsByBead(beadId);
+  }
+
+  async markResolved(id: string): Promise<void> {
+    return this.learningStorage.markErrorResolved(id);
+  }
+
+  async getAll(): Promise<ErrorEntry[]> {
+    return this.learningStorage.getAllErrors();
+  }
+}
+
+
+
 /**
  * Error accumulator for tracking errors during subtask execution
  *
@@ -787,7 +819,7 @@ export class ErrorAccumulator {
   private storage: ErrorStorage;
 
   constructor(storage?: ErrorStorage) {
-    this.storage = storage ?? new InMemoryErrorStorage();
+    this.storage = storage ?? new LearningErrorStorageAdapter(getStorage());
   }
 
   /**

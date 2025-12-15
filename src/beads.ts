@@ -15,6 +15,7 @@
  */
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
+import { executeCommand } from "./utils/cli-executor";
 
 // ============================================================================
 // Working Directory Configuration
@@ -47,49 +48,24 @@ export function getBeadsWorkingDirectory(): string {
 
 /**
  * Run a bd command in the correct working directory.
- * Uses Bun.spawn with cwd option to ensure commands run in project directory.
+ * Uses unified CLI executor with cwd option.
  */
 async function runBdCommand(
   args: string[],
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const cwd = getBeadsWorkingDirectory();
-  const proc = Bun.spawn(["bd", ...args], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-
-  const exitCode = await proc.exited;
-
-  return { exitCode, stdout, stderr };
+  return executeCommand(["bd", ...args], { cwd });
 }
 
 /**
  * Run a git command in the correct working directory.
+ * Uses unified CLI executor with cwd option.
  */
 async function runGitCommand(
   args: string[],
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const cwd = getBeadsWorkingDirectory();
-  const proc = Bun.spawn(["git", ...args], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-
-  const exitCode = await proc.exited;
-
-  return { exitCode, stdout, stderr };
+  return executeCommand(["git", ...args], { cwd });
 }
 
 import {

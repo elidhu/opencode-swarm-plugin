@@ -120,7 +120,8 @@ hive help      Show help
 |------------|----------|-------------|
 | [OpenCode](https://opencode.ai) | Yes | Plugin host |
 | [Beads](https://github.com/steveyegge/beads) | Yes | Git-backed issue tracking |
-| [semantic-memory](https://github.com/joelhooks/semantic-memory) | No | Learning persistence |
+
+**Storage:** Hive uses embedded LanceDB for learning persistence with zero configuration. Data is stored locally in the `.hive/vectors/` directory using Transformers.js for local embeddings (all-mpnet-base-v2 model, 768-dimensional vectors).
 
 ## Development
 

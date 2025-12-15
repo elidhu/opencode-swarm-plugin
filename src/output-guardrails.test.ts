@@ -226,13 +226,17 @@ describe("guardrailOutput", () => {
   test("respects per-tool limits", () => {
     const mediumOutput = "a".repeat(40000);
 
-    // repo-autopsy_file has 64000 char limit
+    // repo-autopsy_file has 64000 char limit - 40k should not be truncated
     const result1 = guardrailOutput("repo-autopsy_file", mediumOutput);
     expect(result1.truncated).toBe(false);
 
-    // skills_read has 8000 char limit
+    // skills_read has 48000 char limit - 40k should not be truncated
     const result2 = guardrailOutput("skills_read", mediumOutput);
-    expect(result2.truncated).toBe(true);
+    expect(result2.truncated).toBe(false);
+
+    // default is 32000, so 40k should be truncated for unknown tools
+    const result3 = guardrailOutput("unknown_tool", mediumOutput);
+    expect(result3.truncated).toBe(true);
   });
 
   test("uses custom config when provided", () => {

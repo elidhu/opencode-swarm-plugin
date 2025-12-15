@@ -13,6 +13,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
+import { getStorage } from "./storage";
 
 // ============================================================================
 // Prompt Templates
@@ -635,9 +636,17 @@ export const hive_plan_prompt = tool({
     // Import needed modules dynamically
     const { selectStrategy, formatStrategyGuidelines, STRATEGIES } =
       await import("./hive-strategies");
-    const { formatMemoryQueryForDecomposition } = await import("./learning");
     const { listSkills, getSkillsContextForSwarm, findRelevantSkills } =
       await import("./skills");
+
+    // Query semantic memory for past learnings
+    const storage = getStorage();
+    const pastLearnings = await storage.findSimilarPatterns(args.task, 3);
+
+    let learningsContext = "";
+    if (pastLearnings.length > 0) {
+      learningsContext = `## Past Learnings\n\nBased on similar past tasks, here are relevant patterns:\n\n${pastLearnings.map((p, i) => `${i + 1}. **${p.kind}**: ${p.content}${p.reason ? ` (${p.reason})` : ""}`).join("\n")}\n\n`;
+    }
 
     // Select strategy
     type StrategyName =
@@ -690,15 +699,17 @@ export const hive_plan_prompt = tool({
       ? `## Additional Context\n${args.context}`
       : "## Additional Context\n(none provided)";
 
-    const prompt = STRATEGY_DECOMPOSITION_PROMPT.replace("{task}", args.task)
+    const basePrompt = STRATEGY_DECOMPOSITION_PROMPT.replace("{task}", args.task)
       .replace("{strategy_guidelines}", strategyGuidelines)
       .replace("{context_section}", contextSection)
       .replace("{skills_context}", skillsContext || "")
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString());
 
+    const fullPrompt = learningsContext + basePrompt;
+
     return JSON.stringify(
       {
-        prompt,
+        prompt: fullPrompt,
         strategy: {
           selected: selectedStrategy,
           reasoning: strategyReasoning,
@@ -724,8 +735,8 @@ export const hive_plan_prompt = tool({
         validation_note:
           "Parse agent response as JSON and validate with hive_validate_decomposition",
         skills: skillsInfo,
-        // Add semantic-memory query instruction
-        memory_query: formatMemoryQueryForDecomposition(args.task, 3),
+        memory_queried: true,
+        patterns_found: pastLearnings.length,
       },
       null,
       2,

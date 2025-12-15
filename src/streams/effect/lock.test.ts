@@ -10,31 +10,23 @@
  * - Deadlock detection (lock not held)
  */
 
-import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Effect } from "effect";
 import {
   DurableLock,
-  DurableLockLive,
   acquireLock,
   releaseLock,
   withLock,
   type LockHandle,
 } from "./lock";
-import { closeDatabase, resetDatabase } from "../index";
+import { createTestDatabase } from "./test-utils";
 
-// Isolated test path for each test run
-let testDbPath: string;
+// Create test database helper
+const testDb = createTestDatabase("lock-test");
 
 describe("DurableLock", () => {
-  beforeEach(async () => {
-    testDbPath = `/tmp/lock-test-${randomUUID()}`;
-    await resetDatabase(testDbPath);
-  });
-
-  afterEach(async () => {
-    await closeDatabase(testDbPath);
-  });
+  beforeEach(testDb.setup);
+  afterEach(testDb.cleanup);
 
   describe("Basic acquire/release", () => {
     it("should acquire and release a lock", async () => {
@@ -51,7 +43,7 @@ describe("DurableLock", () => {
         yield* _(lock.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should use convenience function acquireLock", async () => {
@@ -64,7 +56,7 @@ describe("DurableLock", () => {
         yield* _(lock.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should use convenience function releaseLock", async () => {
@@ -73,7 +65,7 @@ describe("DurableLock", () => {
         yield* _(releaseLock(lock.resource, lock.holder));
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
   });
 
@@ -105,7 +97,7 @@ describe("DurableLock", () => {
         yield* _(lock1.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should allow same holder to re-acquire lock", async () => {
@@ -129,7 +121,7 @@ describe("DurableLock", () => {
         yield* _(lock2.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
   });
 
@@ -156,7 +148,7 @@ describe("DurableLock", () => {
         yield* _(lock2.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     }, 5000);
   });
 
@@ -178,7 +170,7 @@ describe("DurableLock", () => {
         expect(executed).toBe(true);
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should release lock even if effect fails", async () => {
@@ -204,7 +196,7 @@ describe("DurableLock", () => {
         yield* _(lock.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should pass through effect result", async () => {
@@ -214,7 +206,7 @@ describe("DurableLock", () => {
         expect(result).toBe(42);
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
   });
 
@@ -254,7 +246,7 @@ describe("DurableLock", () => {
         }
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     }, 10000);
 
     it("should handle sequential acquisition after release", async () => {
@@ -276,7 +268,7 @@ describe("DurableLock", () => {
         expect(results[2]!.seq).toBe(0);
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
   });
 
@@ -304,7 +296,7 @@ describe("DurableLock", () => {
         yield* _(lock.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should fail with LockNotHeld when releasing already-released lock", async () => {
@@ -323,7 +315,7 @@ describe("DurableLock", () => {
         }
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
   });
 
@@ -340,7 +332,7 @@ describe("DurableLock", () => {
         yield* _(lock.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should respect custom holder ID", async () => {
@@ -353,7 +345,7 @@ describe("DurableLock", () => {
         yield* _(lock.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
 
     it("should respect retry configuration", async () => {
@@ -379,7 +371,7 @@ describe("DurableLock", () => {
         yield* _(lock1.release());
       });
 
-      await Effect.runPromise(program.pipe(Effect.provide(DurableLockLive)));
+      await testDb.run(program);
     });
   });
 });
