@@ -1,6 +1,6 @@
 {
   "name": "opencode-hive-plugin",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Multi-agent hive coordination for OpenCode",
   "type": "module",
   "main": "dist/index.js",
