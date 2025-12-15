@@ -57,6 +57,17 @@
  * - `EnforcementModeSchema`, `EnforcementDecisionSchema`, `EnforcementFailureSchema` - Progressive enforcement
  * - `ConsistencyMetricsSchema` - Protocol effectiveness metrics
  *
+ * ## Spec Schemas (Design Specification Strategy)
+ * - `SpecStatusSchema` - Specification lifecycle status (draft, review, approved, implemented, deprecated)
+ * - `RequirementTypeSchema` - Normative language type (shall, must, should, may)
+ * - `SpecScenarioSchema` - Given-When-Then test scenario
+ * - `SpecRequirementSchema` - Individual requirement with scenarios
+ * - `SpecNfrSchema` - Non-functional requirements
+ * - `SpecEntrySchema` - Complete specification entry
+ * - `SpecChangeTaskSchema` - Task within a change proposal
+ * - `SpecChangeProposalStatusSchema` - Change proposal status
+ * - `SpecChangeProposalSchema` - Proposal for spec modifications
+ *
  * @module schemas
  */
 
@@ -275,3 +286,26 @@ export {
   type EnforcementFailure,
   type ConsistencyMetrics,
 } from "./verification";
+
+// Spec schemas
+export {
+  SpecStatusSchema,
+  RequirementTypeSchema,
+  SpecScenarioSchema,
+  SpecRequirementSchema,
+  SpecNfrSchema,
+  SpecEntrySchema,
+  SpecChangeTaskSchema,
+  SpecChangeProposalStatusSchema,
+  SpecChangeProposalSchema,
+  specSchemas,
+  type SpecStatus,
+  type RequirementType,
+  type SpecScenario,
+  type SpecRequirement,
+  type SpecNfr,
+  type SpecEntry,
+  type SpecChangeTask,
+  type SpecChangeProposalStatus,
+  type SpecChangeProposal,
+} from "./spec";

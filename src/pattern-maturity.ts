@@ -40,7 +40,7 @@ const MAX_EXAMPLE_BEADS = 10;
 /**
  * Pattern kind - whether this is a positive pattern or an anti-pattern
  */
-export const PatternKindSchema = z.enum(["pattern", "anti_pattern"]);
+export const PatternKindSchema = z.enum(["pattern", "anti_pattern", "spec"]);
 export type PatternKind = z.infer<typeof PatternKindSchema>;
 
 /**

@@ -21,6 +21,7 @@ import { mandateTools } from "./mandates";
 import { gotchaTools } from "./gotchas";
 import { preflightTools } from "./preflight";
 import { discoveryTools, setDiscoveryWorkingDirectory } from "./discovery";
+import { specTools, setSpecWorkingDirectory } from "./spec";
 import {
   guardrailOutput,
   DEFAULT_GUARDRAIL_CONFIG,
@@ -41,6 +42,7 @@ import {
  * - gotcha:* - Cross-agent issue broadcasting and discovery
  * - preflight:* - Pre-flight health checks before agent start
  * - discovery:* - Out-of-scope finding tracking and promotion to beads
+ * - spec:* - Design specification management with human review workflow
  */
 export const HivePlugin: Plugin = async (
   input: PluginInput,
@@ -51,6 +53,7 @@ export const HivePlugin: Plugin = async (
   setSkillsProjectDirectory(directory);
   setHiveMailProjectDirectory(directory);
   setDiscoveryWorkingDirectory(directory);
+  setSpecWorkingDirectory(directory);
 
   return {
     tool: {
@@ -64,6 +67,7 @@ export const HivePlugin: Plugin = async (
       ...gotchaTools,
       ...preflightTools,
       ...discoveryTools,
+      ...specTools,
     },
 
     event: async ({ event }) => {
@@ -149,6 +153,7 @@ export const allTools = {
   ...gotchaTools,
   ...preflightTools,
   ...discoveryTools,
+  ...specTools,
 } as const;
 
 export type CLIToolName = keyof typeof allTools;
@@ -261,3 +266,18 @@ export {
   UnifiedOutcomeSchema,
   type UnifiedOutcome,
 } from "./outcomes";
+
+export {
+  specTools,
+  spec_write,
+  spec_submit,
+  spec_implement,
+  spec_query,
+  setSpecWorkingDirectory,
+  getSpecWorkingDirectory,
+  writeSpecFile,
+  loadSpec,
+  formatSpecForEmbedding,
+  createChangeProposal,
+  SpecError,
+} from "./spec";
