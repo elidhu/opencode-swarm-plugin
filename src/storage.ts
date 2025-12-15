@@ -24,6 +24,7 @@
 import type { FeedbackEvent, StrikeRecord, ErrorEntry } from "./learning";
 import type { DecompositionPattern } from "./pattern-maturity";
 import type { PatternMaturity, MaturityFeedback } from "./pattern-maturity";
+import type { SpecializationScore, AgentSpecialization } from "./schemas/specialization";
 import * as lancedb from "@lancedb/lancedb";
 import { embed, EMBEDDING_DIMENSION } from "./embeddings";
 import { existsSync, mkdirSync } from "node:fs";
@@ -93,6 +94,22 @@ export interface LearningStorage {
   getUnresolvedErrorsByBead(beadId: string): Promise<ErrorEntry[]>;
   markErrorResolved(id: string): Promise<void>;
   getAllErrors(): Promise<ErrorEntry[]>;
+
+  // Specialization operations
+  storeSpecializationScore(score: SpecializationScore): Promise<void>;
+  getSpecializationScores(
+    agentId: string,
+    dimension: string,
+    value: string,
+  ): Promise<SpecializationScore[]>;
+  getAllSpecializationScores(agentId: string): Promise<SpecializationScore[]>;
+  findSpecializationScores(
+    dimension: string,
+    value: string,
+  ): Promise<SpecializationScore[]>;
+  storeAgentSpecialization(profile: AgentSpecialization): Promise<void>;
+  getAgentSpecialization(agentId: string): Promise<AgentSpecialization | null>;
+  getAllAgentSpecializations(): Promise<AgentSpecialization[]>;
 
   // Lifecycle
   close(): Promise<void>;
@@ -897,6 +914,247 @@ export class LanceDBStorage implements LearningStorage {
         resolved: r.resolved,
         context: r.context || undefined,
       }));
+    } catch {
+      return [];
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Specialization Operations
+  // -------------------------------------------------------------------------
+
+  async storeSpecializationScore(score: SpecializationScore): Promise<void> {
+    const row = {
+      agent_id: score.agent_id,
+      dimension: score.dimension,
+      value: score.value,
+      success_count: score.success_count,
+      failure_count: score.failure_count,
+      avg_duration_ms: score.avg_duration_ms,
+      avg_error_count: score.avg_error_count,
+      competence: score.competence,
+      confidence: score.confidence,
+      last_updated: score.last_updated,
+    };
+
+    await this.ensureTableAndAdd("specialization-scores", row);
+  }
+
+  async getSpecializationScores(
+    agentId: string,
+    dimension: string,
+    value: string,
+  ): Promise<SpecializationScore[]> {
+    try {
+      const table = await this.getTable("specialization-scores");
+      if (!table) return [];
+
+      const results = await table
+        .query()
+        .where(
+          `agent_id = '${agentId}' AND dimension = '${dimension}' AND value = '${value}'`,
+        )
+        .toArray();
+
+      // Group by unique (agent_id, dimension, value) and keep most recent
+      const byKey = new Map<string, any>();
+      for (const r of results) {
+        const key = `${r.agent_id}-${r.dimension}-${r.value}`;
+        const existing = byKey.get(key);
+        if (!existing || r.last_updated > existing.last_updated) {
+          byKey.set(key, r);
+        }
+      }
+
+      return Array.from(byKey.values()).map((r: any) => ({
+        agent_id: r.agent_id,
+        dimension: r.dimension,
+        value: r.value,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        avg_duration_ms: r.avg_duration_ms,
+        avg_error_count: r.avg_error_count,
+        competence: r.competence,
+        confidence: r.confidence,
+        last_updated: r.last_updated,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async getAllSpecializationScores(
+    agentId: string,
+  ): Promise<SpecializationScore[]> {
+    try {
+      const table = await this.getTable("specialization-scores");
+      if (!table) return [];
+
+      const results = await table
+        .query()
+        .where(`agent_id = '${agentId}'`)
+        .toArray();
+
+      // Group by unique (agent_id, dimension, value) and keep most recent
+      const byKey = new Map<string, any>();
+      for (const r of results) {
+        const key = `${r.agent_id}-${r.dimension}-${r.value}`;
+        const existing = byKey.get(key);
+        if (!existing || r.last_updated > existing.last_updated) {
+          byKey.set(key, r);
+        }
+      }
+
+      return Array.from(byKey.values()).map((r: any) => ({
+        agent_id: r.agent_id,
+        dimension: r.dimension,
+        value: r.value,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        avg_duration_ms: r.avg_duration_ms,
+        avg_error_count: r.avg_error_count,
+        competence: r.competence,
+        confidence: r.confidence,
+        last_updated: r.last_updated,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async findSpecializationScores(
+    dimension: string,
+    value: string,
+  ): Promise<SpecializationScore[]> {
+    try {
+      const table = await this.getTable("specialization-scores");
+      if (!table) return [];
+
+      const results = await table
+        .query()
+        .where(`dimension = '${dimension}' AND value = '${value}'`)
+        .toArray();
+
+      // Group by unique (agent_id, dimension, value) and keep most recent
+      const byKey = new Map<string, any>();
+      for (const r of results) {
+        const key = `${r.agent_id}-${r.dimension}-${r.value}`;
+        const existing = byKey.get(key);
+        if (!existing || r.last_updated > existing.last_updated) {
+          byKey.set(key, r);
+        }
+      }
+
+      return Array.from(byKey.values()).map((r: any) => ({
+        agent_id: r.agent_id,
+        dimension: r.dimension,
+        value: r.value,
+        success_count: r.success_count,
+        failure_count: r.failure_count,
+        avg_duration_ms: r.avg_duration_ms,
+        avg_error_count: r.avg_error_count,
+        competence: r.competence,
+        confidence: r.confidence,
+        last_updated: r.last_updated,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async storeAgentSpecialization(profile: AgentSpecialization): Promise<void> {
+    const row = {
+      agent_id: profile.agent_id,
+      total_tasks: profile.total_tasks,
+      success_rate: profile.success_rate,
+      top_specializations: profile.top_specializations.join(","),
+      first_seen: profile.first_seen,
+      last_seen: profile.last_seen,
+      // Store scores separately (they're already in specialization-scores table)
+    };
+
+    await this.ensureTableAndAdd("agent-specializations", row);
+  }
+
+  async getAgentSpecialization(
+    agentId: string,
+  ): Promise<AgentSpecialization | null> {
+    try {
+      const table = await this.getTable("agent-specializations");
+      if (!table) return null;
+
+      const results = await table
+        .query()
+        .where(`agent_id = '${agentId}'`)
+        .toArray();
+
+      if (results.length === 0) {
+        return null;
+      }
+
+      // Find most recent by last_seen
+      let mostRecent = results[0] as any;
+      for (const r of results) {
+        if ((r as any).last_seen > mostRecent.last_seen) {
+          mostRecent = r;
+        }
+      }
+
+      const r = mostRecent;
+
+      // Fetch all scores for this agent
+      const scores = await this.getAllSpecializationScores(agentId);
+
+      return {
+        agent_id: r.agent_id,
+        total_tasks: r.total_tasks,
+        success_rate: r.success_rate,
+        scores,
+        top_specializations: r.top_specializations
+          ? r.top_specializations.split(",").filter((s: string) => s)
+          : [],
+        first_seen: r.first_seen,
+        last_seen: r.last_seen,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async getAllAgentSpecializations(): Promise<AgentSpecialization[]> {
+    try {
+      const table = await this.getTable("agent-specializations");
+      if (!table) return [];
+
+      const results = await table.query().toArray();
+
+      // Group by agent_id and keep most recent
+      const byAgent = new Map<string, any>();
+      for (const r of results) {
+        const existing = byAgent.get(r.agent_id);
+        if (!existing || r.last_seen > existing.last_seen) {
+          byAgent.set(r.agent_id, r);
+        }
+      }
+
+      // Fetch scores for each agent
+      const profiles: AgentSpecialization[] = [];
+      for (const r of byAgent.values()) {
+        const scores = await this.getAllSpecializationScores(r.agent_id);
+        profiles.push({
+          agent_id: r.agent_id,
+          total_tasks: r.total_tasks,
+          success_rate: r.success_rate,
+          scores,
+          top_specializations: r.top_specializations
+            ? r.top_specializations.split(",").filter((s: string) => s)
+            : [],
+          first_seen: r.first_seen,
+          last_seen: r.last_seen,
+        });
+      }
+
+      return profiles;
     } catch {
       return [];
     }

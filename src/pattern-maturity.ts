@@ -11,6 +11,9 @@
  * and auto-inverts them to anti-patterns. When a pattern consistently fails,
  * it gets flagged as something to avoid.
  *
+ * Pattern-to-Skill Promotion: When patterns reach "proven" state, they can
+ * be automatically promoted to reusable skills for future task decomposition.
+ *
  * @see https://github.com/Dicklesworthstone/cass_memory_system/blob/main/src/scoring.ts#L73-L98
  * @see https://github.com/Dicklesworthstone/cass_memory_system/blob/main/src/curate.ts#L95-L117
  */
@@ -128,6 +131,8 @@ export const PatternMaturitySchema = z.object({
   promoted_at: z.string().optional(),
   /** When the pattern was deprecated (ISO-8601) */
   deprecated_at: z.string().optional(),
+  /** Name of the skill this pattern was promoted to (if any) */
+  promoted_to_skill: z.string().optional(),
 });
 export type PatternMaturity = z.infer<typeof PatternMaturitySchema>;
 
@@ -825,49 +830,288 @@ export function formatSuccessfulPatternsForPrompt(
 }
 
 // ============================================================================
-// Storage
+// Pattern-to-Skill Promotion
 // ============================================================================
 
 /**
- * Storage interface for decomposition patterns
+ * Configuration for pattern-to-skill promotion
  */
-export interface PatternStorage {
-  /** Store or update a pattern */
-  store(pattern: DecompositionPattern): Promise<void>;
-  /** Get a pattern by ID */
-  get(id: string): Promise<DecompositionPattern | null>;
-  /** Get all patterns */
-  getAll(): Promise<DecompositionPattern[]>;
-  /** Get all anti-patterns */
-  getAntiPatterns(): Promise<DecompositionPattern[]>;
-  /** Get patterns by tag */
-  getByTag(tag: string): Promise<DecompositionPattern[]>;
-  /** Find patterns matching content */
-  findByContent(content: string): Promise<DecompositionPattern[]>;
+export interface PromotionConfig {
+  /** Minimum helpful count to consider for promotion */
+  minHelpfulCount: number;
+  /** Maximum harmful ratio (0-1) for promotion eligibility */
+  maxHarmfulRatio: number;
+  /** Require "proven" state for promotion */
+  requireProven: boolean;
 }
 
-
+export const DEFAULT_PROMOTION_CONFIG: PromotionConfig = {
+  minHelpfulCount: 5, // Same as proven threshold
+  maxHarmfulRatio: 0.15, // Same as proven threshold (15%)
+  requireProven: true,
+};
 
 /**
- * Storage interface for pattern maturity records
+ * Result of pattern-to-skill promotion
  */
-export interface MaturityStorage {
-  /** Store or update a maturity record */
-  store(maturity: PatternMaturity): Promise<void>;
-  /** Get maturity record by pattern ID */
-  get(patternId: string): Promise<PatternMaturity | null>;
-  /** Get all maturity records */
-  getAll(): Promise<PatternMaturity[]>;
-  /** Get patterns by state */
-  getByState(state: MaturityState): Promise<PatternMaturity[]>;
-  /** Store a feedback event */
-  storeFeedback(feedback: MaturityFeedback): Promise<void>;
-  /** Get all feedback for a pattern */
-  getFeedback(patternId: string): Promise<MaturityFeedback[]>;
+export interface PromotionResult {
+  /** Whether promotion was successful */
+  success: boolean;
+  /** Name of the created skill */
+  skillName?: string;
+  /** Reason if promotion failed */
+  reason?: string;
+  /** Skill body content that was generated */
+  skillBody?: string;
 }
 
+/**
+ * Check if a pattern should be promoted to a skill
+ *
+ * A pattern is eligible for promotion when:
+ * 1. It has reached "proven" state (or meets thresholds if requireProven=false)
+ * 2. It hasn't already been promoted to a skill
+ * 3. It's not an anti-pattern
+ *
+ * @param pattern - The decomposition pattern to check
+ * @param maturity - The pattern's maturity record
+ * @param config - Promotion configuration
+ * @returns Whether the pattern should be promoted
+ */
+export function shouldPromoteToSkill(
+  pattern: DecompositionPattern,
+  maturity: PatternMaturity,
+  config: PromotionConfig = DEFAULT_PROMOTION_CONFIG,
+): boolean {
+  // Already promoted
+  if (maturity.promoted_to_skill) {
+    return false;
+  }
 
+  // Anti-patterns should not be promoted
+  if (pattern.kind === "anti_pattern") {
+    return false;
+  }
 
+  // Deprecated patterns should not be promoted
+  if (maturity.state === "deprecated") {
+    return false;
+  }
+
+  // Check if proven state is required
+  if (config.requireProven && maturity.state !== "proven") {
+    return false;
+  }
+
+  // Check helpful count threshold
+  if (maturity.helpful_count < config.minHelpfulCount) {
+    return false;
+  }
+
+  // Check harmful ratio
+  const total = maturity.helpful_count + maturity.harmful_count;
+  const harmfulRatio = total > 0 ? maturity.harmful_count / total : 0;
+  if (harmfulRatio > config.maxHarmfulRatio) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Generate a skill name from a pattern
+ *
+ * Converts pattern content to a valid skill name:
+ * - Lowercase
+ * - Hyphens for spaces
+ * - Removes special characters
+ * - Truncates to 64 chars
+ *
+ * @param pattern - The pattern to generate a name for
+ * @returns Valid skill name
+ */
+export function generateSkillName(pattern: DecompositionPattern): string {
+  let name = pattern.content
+    .toLowerCase()
+    .replace(/avoid:\s*/gi, "") // Remove AVOID prefix if present
+    .replace(/\s+/g, "-") // Replace spaces with hyphens
+    .replace(/[^a-z0-9-]/g, "") // Remove special chars
+    .replace(/-+/g, "-") // Collapse multiple hyphens
+    .replace(/^-|-$/g, ""); // Trim leading/trailing hyphens
+
+  // Truncate to 64 chars (skill name limit)
+  if (name.length > 64) {
+    name = name.substring(0, 64).replace(/-$/, "");
+  }
+
+  // Ensure name is not empty
+  if (!name) {
+    name = `pattern-${pattern.id.slice(-8)}`;
+  }
+
+  return name;
+}
+
+/**
+ * Generate skill content from a mature pattern
+ *
+ * Creates a complete skill definition including:
+ * - Description explaining when to use the pattern
+ * - Body with instructions, success stats, and examples
+ *
+ * @param pattern - The decomposition pattern
+ * @param maturity - The pattern's maturity record
+ * @returns Skill metadata and body
+ */
+export function generateSkillFromPattern(
+  pattern: DecompositionPattern,
+  maturity: PatternMaturity,
+): { description: string; body: string; tags: string[] } {
+  const total = maturity.helpful_count + maturity.harmful_count;
+  const successRate = total > 0 ? Math.round((maturity.helpful_count / total) * 100) : 0;
+
+  // Generate description focusing on WHEN to use
+  const description = `Use when decomposing tasks that follow the pattern: ${pattern.content}. This pattern has a ${successRate}% success rate based on ${total} observations.`;
+
+  // Generate body with instructions and context
+  const bodyParts: string[] = [];
+
+  bodyParts.push("# Proven Decomposition Pattern\n");
+  bodyParts.push(`This skill codifies a proven decomposition strategy that has succeeded in ${maturity.helpful_count} of ${total} cases.\n`);
+  
+  bodyParts.push("## Pattern\n");
+  bodyParts.push(`${pattern.content}\n`);
+
+  bodyParts.push("## When to Apply\n");
+  bodyParts.push("Apply this pattern when decomposing tasks that:\n");
+  bodyParts.push(`- Match the strategy described above\n`);
+  bodyParts.push(`- Benefit from this decomposition approach\n`);
+  bodyParts.push(`- Align with the pattern's success criteria\n`);
+
+  bodyParts.push("## Track Record\n");
+  bodyParts.push(`- **Success Rate**: ${successRate}%\n`);
+  bodyParts.push(`- **Successful Applications**: ${maturity.helpful_count}\n`);
+  bodyParts.push(`- **Total Observations**: ${total}\n`);
+  if (maturity.promoted_at) {
+    bodyParts.push(`- **Promoted**: ${new Date(maturity.promoted_at).toLocaleDateString()}\n`);
+  }
+
+  if (pattern.example_beads.length > 0) {
+    bodyParts.push("\n## Example Applications\n");
+    bodyParts.push("This pattern was successfully used in the following tasks:\n");
+    for (const beadId of pattern.example_beads.slice(0, 5)) {
+      bodyParts.push(`- ${beadId}\n`);
+    }
+  }
+
+  bodyParts.push("\n## Guidelines\n");
+  bodyParts.push("When applying this pattern:\n");
+  bodyParts.push("1. Verify the task characteristics match the pattern's success conditions\n");
+  bodyParts.push("2. Follow the decomposition strategy described above\n");
+  bodyParts.push("3. Record feedback to continue improving this pattern\n");
+
+  const body = bodyParts.join("");
+
+  // Include original pattern tags
+  const tags = [...pattern.tags, "decomposition", "proven-pattern"];
+
+  return { description, body, tags };
+}
+
+/**
+ * Promote a mature pattern to a skill
+ *
+ * This function:
+ * 1. Checks if pattern is eligible for promotion
+ * 2. Generates skill name and content
+ * 3. Creates the skill using the skills system
+ * 4. Updates maturity record with promotion info
+ *
+ * Note: This function expects the skills system to be available.
+ * It's designed to be called from higher-level orchestration code
+ * that has access to skill creation tools.
+ *
+ * @param pattern - The decomposition pattern to promote
+ * @param maturity - The pattern's maturity record
+ * @param skillCreator - Function to create skills (typically from skills module)
+ * @param config - Promotion configuration
+ * @returns Promotion result with success status and details
+ */
+export async function promotePatternToSkill(
+  pattern: DecompositionPattern,
+  maturity: PatternMaturity,
+  skillCreator: (args: {
+    name: string;
+    description: string;
+    body: string;
+    tags?: string[];
+  }) => Promise<{ success: boolean; error?: string }>,
+  config: PromotionConfig = DEFAULT_PROMOTION_CONFIG,
+): Promise<PromotionResult> {
+  // Check eligibility
+  if (!shouldPromoteToSkill(pattern, maturity, config)) {
+    return {
+      success: false,
+      reason: "Pattern not eligible for promotion. Must be proven with sufficient success rate.",
+    };
+  }
+
+  // Generate skill content
+  const skillName = generateSkillName(pattern);
+  const { description, body, tags } = generateSkillFromPattern(pattern, maturity);
+
+  // Create the skill
+  try {
+    const result = await skillCreator({
+      name: skillName,
+      description,
+      body,
+      tags,
+    });
+
+    if (!result.success) {
+      return {
+        success: false,
+        reason: result.error || "Skill creation failed",
+      };
+    }
+
+    return {
+      success: true,
+      skillName,
+      skillBody: body,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Mark a pattern as promoted to a skill
+ *
+ * Updates the maturity record to track that this pattern
+ * has been promoted, preventing duplicate promotions.
+ *
+ * @param maturity - The pattern's maturity record
+ * @param skillName - Name of the created skill
+ * @returns Updated maturity record
+ */
+export function markPatternPromoted(
+  maturity: PatternMaturity,
+  skillName: string,
+): PatternMaturity {
+  return {
+    ...maturity,
+    promoted_to_skill: skillName,
+    last_validated: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
+// Storage
 // ============================================================================
 // Exports
 // ============================================================================

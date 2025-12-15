@@ -1975,3 +1975,444 @@ describe("formatSuccessfulPatternsForPrompt", () => {
 });
 
 // InMemoryPatternStorage tests removed - class no longer exists (LanceDB is mandatory)
+
+// ============================================================================
+// Pattern-to-Skill Promotion Tests
+// ============================================================================
+
+import {
+  shouldPromoteToSkill,
+  generateSkillName,
+  generateSkillFromPattern,
+  promotePatternToSkill,
+  markPatternPromoted,
+  DEFAULT_PROMOTION_CONFIG,
+  type PromotionConfig,
+} from "./pattern-maturity";
+
+describe("shouldPromoteToSkill", () => {
+  const basePattern: DecompositionPattern = {
+    id: "pattern-test",
+    content: "Split by file type",
+    kind: "pattern",
+    is_negative: false,
+    success_count: 8,
+    failure_count: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    tags: ["file-splitting"],
+    example_beads: [],
+  };
+
+  const provenMaturity: PatternMaturity = {
+    pattern_id: "pattern-test",
+    state: "proven",
+    helpful_count: 8,
+    harmful_count: 1, // 11% harmful ratio (below 15% threshold)
+    last_validated: new Date().toISOString(),
+    promoted_at: new Date().toISOString(),
+  };
+
+  it("returns true for proven pattern meeting thresholds", () => {
+    expect(shouldPromoteToSkill(basePattern, provenMaturity)).toBe(true);
+  });
+
+  it("returns false if already promoted", () => {
+    const maturity = {
+      ...provenMaturity,
+      promoted_to_skill: "existing-skill",
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity)).toBe(false);
+  });
+
+  it("returns false for anti-patterns", () => {
+    const antiPattern = {
+      ...basePattern,
+      kind: "anti_pattern" as const,
+      is_negative: true,
+    };
+    expect(shouldPromoteToSkill(antiPattern, provenMaturity)).toBe(false);
+  });
+
+  it("returns false for deprecated patterns", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      state: "deprecated",
+      deprecated_at: new Date().toISOString(),
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity)).toBe(false);
+  });
+
+  it("returns false if not proven and requireProven=true", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      state: "established",
+      promoted_at: undefined,
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity)).toBe(false);
+  });
+
+  it("returns true if not proven but requireProven=false", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      state: "established",
+      helpful_count: 8,
+      harmful_count: 1, // 11% harmful - below threshold
+      promoted_at: undefined,
+    };
+    const config: PromotionConfig = {
+      ...DEFAULT_PROMOTION_CONFIG,
+      requireProven: false,
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity, config)).toBe(true);
+  });
+
+  it("returns false if helpful count below threshold", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      helpful_count: 4, // Below default minHelpfulCount of 5
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity)).toBe(false);
+  });
+
+  it("returns false if harmful ratio too high", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      helpful_count: 5,
+      harmful_count: 2, // 28% harmful (above 15% threshold)
+      state: "established",
+      promoted_at: undefined,
+    };
+    const config: PromotionConfig = {
+      ...DEFAULT_PROMOTION_CONFIG,
+      requireProven: false,
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity, config)).toBe(false);
+  });
+
+  it("respects custom helpful count threshold", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      helpful_count: 3,
+      harmful_count: 0, // 0% harmful - well below threshold
+    };
+    const config: PromotionConfig = {
+      ...DEFAULT_PROMOTION_CONFIG,
+      minHelpfulCount: 3,
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity, config)).toBe(true);
+  });
+
+  it("respects custom harmful ratio threshold", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      helpful_count: 5,
+      harmful_count: 2, // 28% harmful
+    };
+    const config: PromotionConfig = {
+      ...DEFAULT_PROMOTION_CONFIG,
+      maxHarmfulRatio: 0.3, // Allow up to 30%
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity, config)).toBe(true);
+  });
+
+  it("handles zero harmful count", () => {
+    const maturity: PatternMaturity = {
+      ...provenMaturity,
+      harmful_count: 0,
+    };
+    expect(shouldPromoteToSkill(basePattern, maturity)).toBe(true);
+  });
+});
+
+describe("generateSkillName", () => {
+  it("converts pattern content to valid skill name", () => {
+    const pattern = createPattern("Split by file type");
+    const name = generateSkillName(pattern);
+    expect(name).toBe("split-by-file-type");
+  });
+
+  it("removes AVOID prefix from anti-patterns", () => {
+    const pattern = createPattern("AVOID: Split by file type");
+    const name = generateSkillName(pattern);
+    expect(name).toBe("split-by-file-type");
+  });
+
+  it("removes special characters", () => {
+    const pattern = createPattern("Split by file (type)!");
+    const name = generateSkillName(pattern);
+    expect(name).toBe("split-by-file-type");
+  });
+
+  it("collapses multiple hyphens", () => {
+    const pattern = createPattern("Split   by   file   type");
+    const name = generateSkillName(pattern);
+    expect(name).toBe("split-by-file-type");
+  });
+
+  it("trims leading and trailing hyphens", () => {
+    const pattern = createPattern("  Split by file type  ");
+    const name = generateSkillName(pattern);
+    expect(name).not.toMatch(/^-|-$/);
+  });
+
+  it("truncates to 64 characters", () => {
+    const longContent = "a".repeat(100);
+    const pattern = createPattern(longContent);
+    const name = generateSkillName(pattern);
+    expect(name.length).toBeLessThanOrEqual(64);
+  });
+
+  it("generates fallback name for empty content", () => {
+    const pattern = createPattern("!@#$%");
+    const name = generateSkillName(pattern);
+    expect(name).toMatch(/^pattern-/);
+  });
+
+  it("converts uppercase to lowercase", () => {
+    const pattern = createPattern("SPLIT BY FILE TYPE");
+    const name = generateSkillName(pattern);
+    expect(name).toBe("split-by-file-type");
+  });
+});
+
+describe("generateSkillFromPattern", () => {
+  const pattern: DecompositionPattern = {
+    id: "pattern-123",
+    content: "Split by file type",
+    kind: "pattern",
+    is_negative: false,
+    success_count: 8,
+    failure_count: 2,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    tags: ["file-splitting", "organization"],
+    example_beads: ["bd-1", "bd-2", "bd-3"],
+  };
+
+  const maturity: PatternMaturity = {
+    pattern_id: "pattern-123",
+    state: "proven",
+    helpful_count: 8,
+    harmful_count: 2,
+    last_validated: new Date().toISOString(),
+    promoted_at: "2024-01-01T00:00:00Z",
+  };
+
+  it("generates description with success rate", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.description).toContain("80% success rate");
+  });
+
+  it("includes pattern content in description", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.description).toContain("Split by file type");
+  });
+
+  it("includes observation count in description", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.description).toContain("10 observations");
+  });
+
+  it("generates body with track record section", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.body).toContain("## Track Record");
+    expect(result.body).toContain("Success Rate");
+    expect(result.body).toContain("80%");
+  });
+
+  it("includes example applications in body", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.body).toContain("## Example Applications");
+    expect(result.body).toContain("bd-1");
+    expect(result.body).toContain("bd-2");
+    expect(result.body).toContain("bd-3");
+  });
+
+  it("includes guidelines in body", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.body).toContain("## Guidelines");
+  });
+
+  it("includes pattern tags plus standard tags", () => {
+    const result = generateSkillFromPattern(pattern, maturity);
+    expect(result.tags).toContain("file-splitting");
+    expect(result.tags).toContain("organization");
+    expect(result.tags).toContain("decomposition");
+    expect(result.tags).toContain("proven-pattern");
+  });
+
+  it("limits example beads to 5", () => {
+    const patternWithManyBeads = {
+      ...pattern,
+      example_beads: ["bd-1", "bd-2", "bd-3", "bd-4", "bd-5", "bd-6", "bd-7"],
+    };
+    const result = generateSkillFromPattern(patternWithManyBeads, maturity);
+    const beadMatches = result.body.match(/bd-\d/g);
+    expect(beadMatches?.length).toBeLessThanOrEqual(5);
+  });
+
+  it("handles zero harmful count correctly", () => {
+    const perfectMaturity: PatternMaturity = {
+      ...maturity,
+      harmful_count: 0,
+    };
+    const result = generateSkillFromPattern(pattern, perfectMaturity);
+    expect(result.description).toContain("100% success rate");
+  });
+});
+
+describe("promotePatternToSkill", () => {
+  const pattern: DecompositionPattern = {
+    id: "pattern-123",
+    content: "Split by file type",
+    kind: "pattern",
+    is_negative: false,
+    success_count: 8,
+    failure_count: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    tags: ["file-splitting"],
+    example_beads: [],
+  };
+
+  const maturity: PatternMaturity = {
+    pattern_id: "pattern-123",
+    state: "proven",
+    helpful_count: 8,
+    harmful_count: 1, // 11% harmful ratio (below 15% threshold)
+    last_validated: new Date().toISOString(),
+    promoted_at: new Date().toISOString(),
+  };
+
+  it("returns success when promotion succeeds", async () => {
+    const mockCreator = async () => ({ success: true });
+    const result = await promotePatternToSkill(
+      pattern,
+      maturity,
+      mockCreator,
+    );
+    expect(result.success).toBe(true);
+    expect(result.skillName).toBe("split-by-file-type");
+  });
+
+  it("calls skill creator with correct arguments", async () => {
+    let capturedArgs: any;
+    const mockCreator = async (args: any) => {
+      capturedArgs = args;
+      return { success: true };
+    };
+
+    await promotePatternToSkill(pattern, maturity, mockCreator);
+    expect(capturedArgs.name).toBe("split-by-file-type");
+    expect(capturedArgs.description).toContain("89% success rate"); // 8/9 = 89%
+    expect(capturedArgs.body).toContain("Track Record");
+    expect(capturedArgs.tags).toContain("decomposition");
+  });
+
+  it("returns failure when pattern not eligible", async () => {
+    const ineligibleMaturity: PatternMaturity = {
+      ...maturity,
+      state: "candidate",
+      promoted_at: undefined,
+    };
+    const mockCreator = async () => ({ success: true });
+
+    const result = await promotePatternToSkill(
+      pattern,
+      ineligibleMaturity,
+      mockCreator,
+    );
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain("not eligible");
+  });
+
+  it("returns failure when skill creation fails", async () => {
+    const mockCreator = async () => ({
+      success: false,
+      error: "Skill already exists",
+    });
+
+    const result = await promotePatternToSkill(
+      pattern,
+      maturity,
+      mockCreator,
+    );
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe("Skill already exists");
+  });
+
+  it("handles creator exceptions", async () => {
+    const mockCreator = async () => {
+      throw new Error("Network error");
+    };
+
+    const result = await promotePatternToSkill(
+      pattern,
+      maturity,
+      mockCreator,
+    );
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain("Network error");
+  });
+
+  it("respects custom promotion config", async () => {
+    const customMaturity: PatternMaturity = {
+      ...maturity,
+      state: "established",
+      helpful_count: 8,
+      harmful_count: 1, // 11% harmful - below threshold
+      promoted_at: undefined,
+    };
+    const config: PromotionConfig = {
+      ...DEFAULT_PROMOTION_CONFIG,
+      requireProven: false,
+    };
+    const mockCreator = async () => ({ success: true });
+
+    const result = await promotePatternToSkill(
+      pattern,
+      customMaturity,
+      mockCreator,
+      config,
+    );
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("markPatternPromoted", () => {
+  it("adds promoted_to_skill field", () => {
+    const maturity = createPatternMaturity("test-pattern");
+    const marked = markPatternPromoted(maturity, "my-skill");
+    expect(marked.promoted_to_skill).toBe("my-skill");
+  });
+
+  it("updates last_validated timestamp", () => {
+    const maturity = createPatternMaturity("test-pattern");
+    const before = new Date();
+    const marked = markPatternPromoted(maturity, "my-skill");
+    const after = new Date();
+
+    const validated = new Date(marked.last_validated);
+    expect(validated.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(validated.getTime()).toBeLessThanOrEqual(after.getTime());
+  });
+
+  it("preserves other maturity fields", () => {
+    const maturity: PatternMaturity = {
+      pattern_id: "test",
+      state: "proven",
+      helpful_count: 10,
+      harmful_count: 2,
+      last_validated: "2024-01-01T00:00:00Z",
+      promoted_at: "2024-01-01T00:00:00Z",
+    };
+
+    const marked = markPatternPromoted(maturity, "my-skill");
+    expect(marked.pattern_id).toBe("test");
+    expect(marked.state).toBe("proven");
+    expect(marked.helpful_count).toBe(10);
+    expect(marked.harmful_count).toBe(2);
+    expect(marked.promoted_at).toBe("2024-01-01T00:00:00Z");
+  });
+});

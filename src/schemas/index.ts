@@ -37,6 +37,26 @@
  * - `DecompositionStrategySchema` - Strategy used for decomposition
  * - `ProgressMilestoneSchema` - Progress milestone tracking
  *
+ * ## Discovery Schemas (Out-of-Scope Findings)
+ * - `DiscoveryEntrySchema` - Core discovery entry
+ * - `DiscoveryTypeSchema` - Discovery type categorization
+ * - `DiscoveryUrgencySchema` - Urgency level for triage
+ * - `DiscoveryStatusSchema` - Discovery lifecycle status
+ * - `DiscoveryStatsSchema` - Queue statistics
+ *
+ * ## Specialization Schemas (Emergent Self-Organization)
+ * - `TaskDimensionSchema` - Task categorization dimensions (file_type, strategy, complexity, domain)
+ * - `SpecializationScoreSchema` - Agent competence on a dimension value
+ * - `AgentSpecializationSchema` - Aggregate agent specialization profile
+ *
+ * ## Verification Schemas (Cross-Agent Consistency Protocols)
+ * - `PreFlightResultSchema`, `PreFlightCheckSchema`, `PreFlightProtocolSchema` - Pre-flight health checks
+ * - `GotchaSchema`, `ReportGotchaArgsSchema`, `QueryGotchasArgsSchema` - Shared gotcha broadcasting
+ * - `StyleViolationSchema`, `StyleRuleSchema`, `StyleCheckResultSchema` - Style enforcement
+ * - `VerificationGateSchema`, `VerificationStageSchema`, `VerificationStepSchema` - Multi-stage verification
+ * - `EnforcementModeSchema`, `EnforcementDecisionSchema`, `EnforcementFailureSchema` - Progressive enforcement
+ * - `ConsistencyMetricsSchema` - Protocol effectiveness metrics
+ *
  * @module schemas
  */
 
@@ -165,3 +185,93 @@ export {
   type CheckpointRecoverArgs,
   type CheckpointRecoveryResult,
 } from "./checkpoint";
+
+// Discovery schemas
+export {
+  DiscoveryTypeSchema,
+  DiscoveryUrgencySchema,
+  DiscoveryStatusSchema,
+  DiscoveryEntrySchema,
+  DiscoveryCreateArgsSchema,
+  DiscoveryUpdateArgsSchema,
+  DiscoveryQueryArgsSchema,
+  DiscoveryStatsSchema,
+  DiscoveryPromoteArgsSchema,
+  DiscoveryPromoteResultSchema,
+  type DiscoveryType,
+  type DiscoveryUrgency,
+  type DiscoveryStatus,
+  type DiscoveryEntry,
+  type DiscoveryCreateArgs,
+  type DiscoveryUpdateArgs,
+  type DiscoveryQueryArgs,
+  type DiscoveryStats,
+  type DiscoveryPromoteArgs,
+  type DiscoveryPromoteResult,
+} from "./discovery";
+
+// Specialization schemas
+export {
+  TaskDimensionSchema,
+  SpecializationScoreSchema,
+  AgentSpecializationSchema,
+  specializationSchemas,
+  type TaskDimension,
+  type SpecializationScore,
+  type AgentSpecialization,
+  type SpecialistQuery,
+  type TaskDimensions,
+} from "./specialization";
+
+// Verification schemas
+export {
+  PreFlightResultSchema,
+  PreFlightCheckSchema,
+  PreFlightProtocolSchema,
+  GotchaCategorySchema,
+  GotchaSchema,
+  ReportGotchaArgsSchema,
+  QueryGotchasArgsSchema,
+  StyleCategorySchema,
+  StyleViolationSchema,
+  FileContextSchema,
+  StyleRuleSchema,
+  CheckStyleArgsSchema,
+  StyleCheckResultSchema,
+  CheckResultSchema,
+  VerificationContextSchema,
+  VerificationCheckSchema,
+  VerificationStageSchema,
+  EnforcementModeSchema,
+  VerificationGateSchema,
+  VerificationStepSchema,
+  VerificationGateResultSchema,
+  EnforcementDecisionSchema,
+  EnforcementFailureSchema,
+  ConsistencyMetricsSchema,
+  verificationSchemas,
+  type PreFlightResult,
+  type PreFlightCheck,
+  type PreFlightProtocol,
+  type GotchaCategory,
+  type Gotcha,
+  type ReportGotchaArgs,
+  type QueryGotchasArgs,
+  type StyleCategory,
+  type StyleViolation,
+  type FileContext,
+  type StyleRule,
+  type CheckStyleArgs,
+  type StyleCheckResult,
+  type CheckResult,
+  type VerificationContext,
+  type VerificationCheck,
+  type VerificationStage,
+  type EnforcementMode,
+  type VerificationGate,
+  type VerificationStep,
+  type VerificationGateResult,
+  type EnforcementDecision,
+  type EnforcementFailure,
+  type ConsistencyMetrics,
+} from "./verification";

@@ -856,6 +856,10 @@ function generateSkillContent(
  *
  * Agents can use this to codify learned patterns, best practices,
  * or domain-specific knowledge into reusable skills.
+ *
+ * This tool is also used by the pattern-to-skill promotion system
+ * to automatically create skills from mature decomposition patterns.
+ * See pattern-maturity.ts for the promotion implementation.
  */
 export const skills_create = tool({
   description: `Create a new skill in the project.
@@ -1530,4 +1534,71 @@ export async function findRelevantSkills(
   }
 
   return relevant;
+}
+
+/**
+ * Create a skill from pattern data (used by pattern-to-skill promotion)
+ *
+ * This is a helper function that wraps the skill creation logic for use
+ * by the pattern maturity system. It provides a simpler interface that
+ * matches what the promotion system expects.
+ *
+ * Example usage:
+ * ```typescript
+ * import { promotePatternToSkill } from './pattern-maturity';
+ * import { createSkillFromPattern } from './skills';
+ *
+ * const result = await promotePatternToSkill(
+ *   pattern,
+ *   maturity,
+ *   createSkillFromPattern
+ * );
+ * ```
+ *
+ * @param args - Skill creation arguments
+ * @returns Success result with error if any
+ */
+export async function createSkillFromPattern(args: {
+  name: string;
+  description: string;
+  body: string;
+  tags?: string[];
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Check if skill already exists
+    const existing = await getSkill(args.name);
+    if (existing) {
+      return {
+        success: false,
+        error: `Skill '${args.name}' already exists at ${existing.path}`,
+      };
+    }
+
+    // Determine target directory
+    const skillDir = join(skillsProjectDirectory, DEFAULT_SKILLS_DIR, args.name);
+    const skillPath = join(skillDir, "SKILL.md");
+
+    // Create skill directory
+    await mkdir(skillDir, { recursive: true });
+
+    // Generate and write SKILL.md
+    const content = generateSkillContent(
+      args.name,
+      args.description,
+      args.body,
+      { tags: args.tags },
+    );
+
+    await writeFile(skillPath, content, "utf-8");
+
+    // Invalidate cache so new skill is discoverable
+    invalidateSkillsCache();
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

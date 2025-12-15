@@ -18,6 +18,9 @@ import { hiveTools } from "./hive";
 import { repoCrawlTools } from "./repo-crawl";
 import { skillsTools, setSkillsProjectDirectory } from "./skills";
 import { mandateTools } from "./mandates";
+import { gotchaTools } from "./gotchas";
+import { preflightTools } from "./preflight";
+import { discoveryTools, setDiscoveryWorkingDirectory } from "./discovery";
 import {
   guardrailOutput,
   DEFAULT_GUARDRAIL_CONFIG,
@@ -35,6 +38,9 @@ import {
  * - repo-crawl:* - GitHub API tools for repository research
  * - skills:* - Agent skills discovery, activation, and execution
  * - mandate:* - Agent voting system for collaborative knowledge curation
+ * - gotcha:* - Cross-agent issue broadcasting and discovery
+ * - preflight:* - Pre-flight health checks before agent start
+ * - discovery:* - Out-of-scope finding tracking and promotion to beads
  */
 export const HivePlugin: Plugin = async (
   input: PluginInput,
@@ -44,6 +50,7 @@ export const HivePlugin: Plugin = async (
   setBeadsWorkingDirectory(directory);
   setSkillsProjectDirectory(directory);
   setHiveMailProjectDirectory(directory);
+  setDiscoveryWorkingDirectory(directory);
 
   return {
     tool: {
@@ -54,6 +61,9 @@ export const HivePlugin: Plugin = async (
       ...repoCrawlTools,
       ...skillsTools,
       ...mandateTools,
+      ...gotchaTools,
+      ...preflightTools,
+      ...discoveryTools,
     },
 
     event: async ({ event }) => {
@@ -136,6 +146,9 @@ export const allTools = {
   ...repoCrawlTools,
   ...skillsTools,
   ...mandateTools,
+  ...gotchaTools,
+  ...preflightTools,
+  ...discoveryTools,
 } as const;
 
 export type CLIToolName = keyof typeof allTools;
@@ -185,6 +198,26 @@ export {
 } from "./skills";
 
 export { mandateTools, MandateError } from "./mandates";
+
+export { gotchaTools } from "./gotchas";
+
+export { preflightTools } from "./preflight";
+
+export {
+  discoveryTools,
+  setDiscoveryWorkingDirectory,
+  getDiscoveryWorkingDirectory,
+  getDiscoveryStorage,
+  setDiscoveryStorage,
+  resetDiscoveryStorage,
+  setDiscoveryContext,
+  getDiscoveryContext,
+  clearDiscoveryContext,
+  LanceDBDiscoveryStorage,
+  DiscoveryError,
+  DiscoveryValidationError,
+  type DiscoveryStorage,
+} from "./discovery";
 
 export {
   createMandateStorage,

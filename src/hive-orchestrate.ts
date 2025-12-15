@@ -1504,6 +1504,7 @@ export const hive_check_strikes = tool({
 
         // Store anti-pattern on 3-strike
         let memoryStored = false;
+        let broadcastSent = false;
         if (strikedOut) {
           try {
             const storage = getStorage();
@@ -1530,15 +1531,91 @@ export const hive_check_strikes = tool({
               `[hive] Failed to store anti-pattern: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
+
+          // Broadcast failure pattern to all agents in the epic
+          try {
+            // Extract epic ID from bead ID
+            const epicId = args.bead_id.includes(".")
+              ? args.bead_id.split(".")[0]
+              : args.bead_id;
+
+            const failuresList = record.failures
+              .map((f, i) => `${i + 1}. **${f.attempt}**\n   - Failed: ${f.reason}`)
+              .join("\n\n");
+
+            const broadcastBody = `## 🚨 Architecture Problem Detected
+
+**Bead**: ${args.bead_id}
+**Status**: 3-STRIKE LIMIT REACHED
+
+This task has failed 3 consecutive times, indicating a likely architectural or design problem rather than an implementation issue.
+
+### Failed Attempts
+
+${failuresList}
+
+### What This Means
+
+- DO NOT attempt Fix #4
+- The problem is likely structural, not tactical
+- Human decision/input required
+- Consider: Is the task decomposition correct? Are there missing dependencies? Is the approach fundamentally flawed?
+
+### Anti-Pattern Stored
+
+This failure pattern has been stored in semantic memory to warn future agents about similar architectural issues.
+
+### Recommended Actions
+
+1. STOP current approach
+2. Call \`hive_check_strikes(action="get_prompt")\` for architecture review questions
+3. Escalate to human for architectural decision
+4. Consider re-decomposing the epic with a different strategy
+
+**This is a learning opportunity** - the hive has discovered an edge case in task decomposition.`;
+
+            await sendSwarmMessage({
+              projectPath: process.cwd(), // Current project
+              fromAgent: "hive-orchestrate", // System agent
+              toAgents: [], // Broadcast to thread
+              subject: `🚨 3-STRIKE ALERT: ${args.bead_id} - Architecture Review Required`,
+              body: broadcastBody,
+              threadId: epicId,
+              importance: "urgent",
+              ackRequired: true,
+            });
+
+            broadcastSent = true;
+            console.log(
+              `[hive] Broadcast 3-strike alert for ${args.bead_id} to epic ${epicId}`,
+            );
+          } catch (error) {
+            console.warn(
+              `[hive] Failed to broadcast 3-strike alert: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
 
-        // Build response with memory storage status
+        // Build response with anti-pattern highlighting
         const response: Record<string, unknown> = {
           bead_id: args.bead_id,
           strike_count: record.strike_count,
           is_striked_out: strikedOut,
           failures: record.failures,
-          memory_stored: strikedOut ? memoryStored : undefined,
+          anti_pattern: strikedOut
+            ? {
+                stored: memoryStored,
+                broadcast_sent: broadcastSent,
+                highlights: [
+                  "🚨 ARCHITECTURAL PROBLEM DETECTED",
+                  "Pattern stored in semantic memory",
+                  "All agents in epic notified",
+                  "This anti-pattern will warn future hives",
+                ],
+                learning_signal:
+                  "High-confidence negative example for decomposition strategy",
+              }
+            : undefined,
           message: strikedOut
             ? "⚠️ STRUCK OUT: 3 strikes reached. STOP and question the architecture."
             : `Strike ${record.strike_count} recorded. ${3 - record.strike_count} remaining.`,
