@@ -990,3 +990,6 @@ Examples:
   hive spec clarify spec-rate-limiting-v1 --question "Per-user or per-key?" --answer "Per API key"
 `);
 }
+
+// Export alias for CLI integration
+export { main as specCommand };
