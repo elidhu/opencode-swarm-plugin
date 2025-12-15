@@ -1,6 +1,6 @@
 {
   "name": "opencode-hive-plugin",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "Multi-agent hive coordination for OpenCode",
   "type": "module",
   "main": "dist/index.js",
@@ -39,7 +39,7 @@
     "@clack/prompts": "^0.11.0",
     "@effect/schema": "^0.75.5",
     "@electric-sql/pglite": "0.3.14",
-    "@huggingface/transformers": "^3.1.2",
+    "@huggingface/transformers": "^3.8.1",
     "@lancedb/lancedb": "^0.15.0",
     "@opencode-ai/plugin": "^1.0.134",
     "effect": "^3.19.12",
