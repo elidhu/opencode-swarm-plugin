@@ -565,6 +565,267 @@ class FakeStorage implements FileStorage {
 }
 ```
 
+## Database Adapter Pattern
+
+### Seam Type
+
+**Interface extraction + Factory function**
+
+This is a combination technique: extract a common interface for database operations, then use a factory function as the enabling point to choose which implementation to use.
+
+### The Problem
+
+Database-dependent code creates testing challenges:
+
+- **Slow Tests**: Real database I/O is 10x slower than in-memory operations
+- **Shared State**: Tests pollute each other's state when using shared database
+- **Flaky Tests**: Race conditions and timing issues with real databases
+- **Setup Complexity**: Tests need migrations, seed data, cleanup
+
+### Before (Tightly Coupled)
+
+```typescript
+// Direct database usage - hard to test
+async function sendMessage(msg: Message) {
+  const db = getDatabase(); // Singleton - can't swap implementation
+  await db.query('INSERT INTO messages (subject, body) VALUES ($1, $2)', [msg.subject, msg.body]);
+}
+
+// Tests must use real database
+test('sends message', async () => {
+  // Slow: real PGLite instance
+  // Shared: other tests see this data
+  await sendMessage({ subject: 'Test', body: 'Body' });
+});
+```
+
+### After (Decoupled)
+
+```typescript
+// Step 1: Define interface (seam)
+interface DatabaseAdapter {
+  query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>>;
+  exec(sql: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+// Step 2: Production implementation
+class PGliteDatabaseAdapter implements DatabaseAdapter {
+  constructor(private db: PGlite) {}
+  
+  async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    const result = await this.db.query<T>(sql, params);
+    return { rows: result.rows, affectedRows: result.affectedRows };
+  }
+  
+  async exec(sql: string): Promise<void> {
+    await this.db.exec(sql);
+  }
+  
+  async close(): Promise<void> {
+    await this.db.close();
+  }
+}
+
+// Step 3: Test implementation (fake)
+class InMemoryDatabaseAdapter implements DatabaseAdapter {
+  private tables = new Map<string, Array<Record<string, any>>>();
+  
+  async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    // Simple in-memory simulation
+    // No SQL parser needed - pattern match common queries
+    if (sql.includes('INSERT INTO messages')) {
+      const messages = this.tables.get('messages') || [];
+      messages.push({ subject: params[0], body: params[1] });
+      this.tables.set('messages', messages);
+      return { rows: [] as T[] };
+    }
+    
+    if (sql.includes('SELECT * FROM messages')) {
+      const messages = this.tables.get('messages') || [];
+      return { rows: messages as T[] };
+    }
+    
+    return { rows: [] as T[] };
+  }
+  
+  async exec(sql: string): Promise<void> {
+    // Handle CREATE TABLE, CREATE INDEX, etc.
+    if (sql.includes('CREATE TABLE')) {
+      const match = sql.match(/CREATE TABLE (\w+)/i);
+      if (match) {
+        this.tables.set(match[1], []);
+      }
+    }
+  }
+  
+  async close(): Promise<void> {
+    this.tables.clear();
+  }
+}
+
+// Step 4: Factory function (enabling point)
+async function createSwarmMailAdapter(options: {
+  projectPath?: string;
+  inMemory?: boolean;
+  dbOverride?: DatabaseAdapter;
+}) {
+  let db: DatabaseAdapter;
+  
+  if (options.dbOverride) {
+    db = options.dbOverride;
+  } else if (options.inMemory) {
+    db = new InMemoryDatabaseAdapter();
+  } else {
+    const pglite = await getDatabase(options.projectPath);
+    db = new PGliteDatabaseAdapter(pglite);
+  }
+  
+  return { db, /* ... other adapter methods */ };
+}
+
+// Step 5: Accept adapter as optional parameter (backwards compatible)
+async function sendMessage(msg: Message, adapter?: SwarmMailAdapter) {
+  const db = adapter?.db ?? (await createSwarmMailAdapter()).db;
+  await db.query(
+    'INSERT INTO messages (subject, body) VALUES ($1, $2)',
+    [msg.subject, msg.body]
+  );
+}
+```
+
+### Test Setup
+
+```typescript
+import { createInMemorySwarmMail } from './streams/test-utils';
+
+describe('Message Sending', () => {
+  let adapter: SwarmMailAdapter;
+  let cleanup: () => Promise<void>;
+  
+  beforeEach(async () => {
+    // Fast: in-memory adapter, no disk I/O
+    // Isolated: each test gets its own instance
+    const result = await createInMemorySwarmMail();
+    adapter = result.adapter;
+    cleanup = result.cleanup;
+  });
+  
+  afterEach(async () => {
+    await cleanup();
+  });
+  
+  it('sends message successfully', async () => {
+    // 10x faster than PGLite
+    // No shared state with other tests
+    await sendMessage({ subject: 'Test', body: 'Body' }, adapter);
+    
+    const messages = await adapter.db.query('SELECT * FROM messages');
+    expect(messages.rows).toHaveLength(1);
+  });
+});
+```
+
+### Benefits
+
+1. **Speed**: In-memory tests run 10x faster than PGLite
+2. **Isolation**: Each test gets its own adapter instance - no shared state
+3. **Parallelization**: Tests can run in parallel safely
+4. **Simplicity**: No database migrations or cleanup needed in tests
+5. **Flexibility**: Easy to swap implementations (production, test, mock)
+
+### When to Use
+
+- **Unit Tests**: Always use in-memory adapter for speed and isolation
+- **Integration Tests**: Use real database adapter to verify SQL correctness
+- **Database-Dependent Code**: Any code that queries or mutates database
+- **Performance-Critical Tests**: When test suite takes too long
+- **CI/CD Pipelines**: Faster builds with in-memory tests
+
+### Trade-offs
+
+**Limitations of In-Memory Adapter**:
+
+- No SQL parsing (uses regex pattern matching)
+- Limited query support (no JOINs, subqueries, CTEs)
+- May not catch database-specific bugs (constraints, triggers)
+- Behavior may differ slightly from real database
+
+**Solution**: Use both adapters appropriately:
+
+```typescript
+// Fast unit tests: in-memory
+describe('Business Logic', () => {
+  const adapter = await createSwarmMailAdapter({ inMemory: true });
+  // ...
+});
+
+// Slower integration tests: real database
+describe('SQL Queries', () => {
+  const adapter = await createSwarmMailAdapter({ projectPath: './test-db' });
+  // ...
+});
+```
+
+### Real-World Example
+
+From `src/adapter.test.ts`:
+
+```typescript
+describe("InMemoryDatabaseAdapter", () => {
+  let db: DatabaseAdapter;
+
+  beforeEach(() => {
+    db = new InMemoryDatabaseAdapter();
+  });
+
+  afterEach(async () => {
+    await db.close();
+  });
+
+  it("should handle transactions", async () => {
+    await db.exec("CREATE TABLE accounts (id SERIAL, balance INTEGER)");
+    await db.query("INSERT INTO accounts (balance) VALUES ($1)", [100]);
+    
+    // BEGIN transaction
+    await db.exec("BEGIN");
+    await db.query("UPDATE accounts SET balance = $1 WHERE id = $2", [150, 1]);
+    
+    // ROLLBACK - should restore original state
+    await db.exec("ROLLBACK");
+    
+    const result = await db.query<{ balance: number }>(
+      "SELECT balance FROM accounts WHERE id = 1"
+    );
+    
+    expect(result.rows[0].balance).toBe(100); // Original value preserved
+  });
+  
+  it("should auto-increment SERIAL columns", async () => {
+    await db.exec("CREATE TABLE events (id SERIAL PRIMARY KEY, type TEXT)");
+    
+    await db.query("INSERT INTO events (type) VALUES ($1)", ["event1"]);
+    await db.query("INSERT INTO events (type) VALUES ($1)", ["event2"]);
+    
+    const result = await db.query<{ id: number; type: string }>(
+      "SELECT id, type FROM events"
+    );
+    
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0].id).toBe(1);
+    expect(result.rows[1].id).toBe(2);
+  });
+});
+```
+
+### See Also
+
+- `src/adapter.ts` - Full implementation with both adapters
+- `src/streams/test-utils.ts` - `createInMemorySwarmMail()` helper
+- `src/types/database.ts` - `DatabaseAdapter` interface definition
+- Extract Interface (above) - Core technique for creating the seam
+- Skin and Wrap the API (above) - Similar pattern for external APIs
+
 ## Quick Reference
 
 | Problem                         | Technique                           |

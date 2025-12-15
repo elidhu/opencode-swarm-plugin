@@ -123,6 +123,29 @@ export const migrations: Migration[] = [
     `,
     down: `DROP TABLE IF EXISTS locks;`,
   },
+  {
+    version: 4,
+    description: "Add swarm_contexts table for checkpoint/recovery",
+    up: `
+      CREATE TABLE IF NOT EXISTS swarm_contexts (
+        id SERIAL PRIMARY KEY,
+        epic_id TEXT NOT NULL,
+        bead_id TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        context JSONB NOT NULL,
+        progress_percent INTEGER NOT NULL DEFAULT 0,
+        milestone TEXT,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL,
+        UNIQUE(epic_id, bead_id, agent_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_swarm_contexts_epic ON swarm_contexts(epic_id);
+      CREATE INDEX IF NOT EXISTS idx_swarm_contexts_bead ON swarm_contexts(bead_id);
+      CREATE INDEX IF NOT EXISTS idx_swarm_contexts_agent ON swarm_contexts(agent_name);
+      CREATE INDEX IF NOT EXISTS idx_swarm_contexts_updated ON swarm_contexts(updated_at);
+    `,
+    down: `DROP TABLE IF EXISTS swarm_contexts;`,
+  },
 ];
 
 // ============================================================================

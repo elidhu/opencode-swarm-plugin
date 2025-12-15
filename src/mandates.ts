@@ -100,6 +100,14 @@ export const mandate_file = tool({
       .record(tool.schema.string(), tool.schema.unknown())
       .optional()
       .describe("Optional metadata (e.g., code language for snippets)"),
+    source: tool.schema
+      .enum(["user", "agent", "directive"])
+      .optional()
+      .describe("Source of mandate (user/agent/directive)"),
+    source_ref: tool.schema
+      .string()
+      .optional()
+      .describe("Reference to source (e.g., bead_id for directives)"),
   },
   async execute(args) {
     // Validate args
@@ -118,6 +126,8 @@ export const mandate_file = tool({
       status: "candidate",
       tags: validated.tags || [],
       metadata: validated.metadata,
+      source: validated.source,
+      source_ref: validated.source_ref,
     };
 
     // Validate schema

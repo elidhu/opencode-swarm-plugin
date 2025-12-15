@@ -15,6 +15,11 @@
  * - DurableCursor for positioned inbox consumption with checkpointing
  * - DurableLock for file reservations (mutual exclusion via CAS)
  * - DurableDeferred for request/response messaging
+ *
+ * Adapter Pattern:
+ * - All functions accept optional DatabaseAdapter for dependency injection
+ * - Enables in-memory testing without PGLite overhead
+ * - Falls back to PGLite via getDatabase() if adapter not provided
  */
 import { createEvent } from "./events";
 import { isDatabaseHealthy, getDatabaseStats } from "./index";
@@ -25,6 +30,7 @@ import {
   getMessage,
 } from "./projections";
 import { appendEvent, registerAgent, reserveFiles, sendMessage } from "./store";
+import type { DatabaseAdapter } from "../types/database";
 
 // ============================================================================
 // Constants
@@ -92,6 +98,7 @@ export interface InitSwarmAgentOptions {
   program?: string;
   model?: string;
   taskDescription?: string;
+  adapter?: DatabaseAdapter;
 }
 
 export interface SendSwarmMessageOptions {
@@ -103,6 +110,7 @@ export interface SendSwarmMessageOptions {
   threadId?: string;
   importance?: "low" | "normal" | "high" | "urgent";
   ackRequired?: boolean;
+  adapter?: DatabaseAdapter;
 }
 
 export interface SendSwarmMessageResult {
@@ -119,6 +127,7 @@ export interface GetSwarmInboxOptions {
   urgentOnly?: boolean;
   unreadOnly?: boolean;
   includeBodies?: boolean;
+  adapter?: DatabaseAdapter;
 }
 
 export interface SwarmInboxMessage {
@@ -141,6 +150,7 @@ export interface ReadSwarmMessageOptions {
   messageId: number;
   agentName?: string;
   markAsRead?: boolean;
+  adapter?: DatabaseAdapter;
 }
 
 export interface ReserveSwarmFilesOptions {
@@ -151,6 +161,7 @@ export interface ReserveSwarmFilesOptions {
   exclusive?: boolean;
   ttlSeconds?: number;
   force?: boolean;
+  adapter?: DatabaseAdapter;
 }
 
 export interface GrantedSwarmReservation {
@@ -176,6 +187,7 @@ export interface ReleaseSwarmFilesOptions {
   agentName: string;
   paths?: string[];
   reservationIds?: number[];
+  adapter?: DatabaseAdapter;
 }
 
 export interface ReleaseSwarmFilesResult {
@@ -187,6 +199,7 @@ export interface AcknowledgeSwarmOptions {
   projectPath: string;
   messageId: number;
   agentName: string;
+  adapter?: DatabaseAdapter;
 }
 
 export interface AcknowledgeSwarmResult {
@@ -223,9 +236,11 @@ export async function initSwarmAgent(
     program = "opencode",
     model = "unknown",
     taskDescription,
+    // adapter: Stored in session state, will be passed through once store.ts supports it (bead .2)
   } = options;
 
   // Register the agent (creates event + updates view)
+  // TODO: Pass adapter once store.ts registerAgent() accepts it (bead .2)
   await registerAgent(
     projectPath, // Use projectPath as projectKey
     agentName,
@@ -260,8 +275,10 @@ export async function sendSwarmMessage(
     threadId,
     importance = "normal",
     ackRequired = false,
+    // adapter: Will be used once store.ts sendMessage() accepts it (bead .2)
   } = options;
 
+  // TODO: Pass adapter once store.ts sendMessage() accepts it (bead .2)
   await sendMessage(
     projectPath,
     fromAgent,
@@ -273,9 +290,18 @@ export async function sendSwarmMessage(
   );
 
   // Get the message ID from the messages table (not the event ID)
-  const { getDatabase } = await import("./index");
-  const db = await getDatabase(projectPath);
-  const result = await db.query<{ id: number }>(
+  // Use adapter if provided, otherwise create PGliteDatabaseAdapter
+  let dbAdapter: DatabaseAdapter;
+  if (options.adapter) {
+    dbAdapter = options.adapter;
+  } else {
+    const { getDatabase } = await import("./index");
+    const { PGliteDatabaseAdapter } = await import("../adapter");
+    const db = await getDatabase(projectPath);
+    dbAdapter = new PGliteDatabaseAdapter(db);
+  }
+  
+  const result = await dbAdapter.query<{ id: number }>(
     `SELECT id FROM messages 
      WHERE project_key = $1 AND from_agent = $2 AND subject = $3
      ORDER BY created_at DESC LIMIT 1`,
@@ -307,11 +333,13 @@ export async function getSwarmInbox(
     urgentOnly = false,
     unreadOnly = false,
     includeBodies = false,
+    // adapter: Will be used once projections.ts getInbox() accepts it (bead .2)
   } = options;
 
   // Enforce max limit
   const effectiveLimit = Math.min(limit, MAX_INBOX_LIMIT);
 
+  // TODO: Pass adapter once projections.ts getInbox() accepts it (bead .2)
   const messages = await getInbox(
     projectPath,
     agentName,
@@ -344,8 +372,15 @@ export async function getSwarmInbox(
 export async function readSwarmMessage(
   options: ReadSwarmMessageOptions,
 ): Promise<SwarmInboxMessage | null> {
-  const { projectPath, messageId, agentName, markAsRead = false } = options;
+  const {
+    projectPath,
+    messageId,
+    agentName,
+    markAsRead = false,
+    // adapter: Will be used once projections/store accept it (bead .2)
+  } = options;
 
+  // TODO: Pass adapter once projections.ts getMessage() accepts it (bead .2)
   const message = await getMessage(projectPath, messageId, projectPath);
 
   if (!message) {
@@ -354,6 +389,7 @@ export async function readSwarmMessage(
 
   // Mark as read if requested
   if (markAsRead && agentName) {
+    // TODO: Pass adapter once store.ts appendEvent() accepts it (bead .2)
     await appendEvent(
       createEvent("message_read", {
         project_key: projectPath,
@@ -397,8 +433,10 @@ export async function reserveSwarmFiles(
     reason,
     exclusive = true,
     ttlSeconds = DEFAULT_TTL_SECONDS,
+    // adapter: Will be used once projections/store accept it (bead .2)
   } = options;
 
+  // TODO: Pass adapter once projections.ts checkConflicts() accepts it (bead .2)
   // Check for conflicts first
   const conflicts = await checkConflicts(
     projectPath,
@@ -407,6 +445,7 @@ export async function reserveSwarmFiles(
     projectPath,
   );
 
+  // TODO: Pass adapter once store.ts reserveFiles() accepts it (bead .2)
   // Always create reservations - conflicts are warnings, not blockers
   await reserveFiles(
     projectPath,
@@ -416,6 +455,7 @@ export async function reserveSwarmFiles(
     projectPath,
   );
 
+  // TODO: Pass adapter once projections.ts getActiveReservations() accepts it (bead .2)
   // Query the actual reservation IDs from the database
   const reservations = await getActiveReservations(
     projectPath,
@@ -451,8 +491,15 @@ export async function reserveSwarmFiles(
 export async function releaseSwarmFiles(
   options: ReleaseSwarmFilesOptions,
 ): Promise<ReleaseSwarmFilesResult> {
-  const { projectPath, agentName, paths, reservationIds } = options;
+  const {
+    projectPath,
+    agentName,
+    paths,
+    reservationIds,
+    // adapter: Will be used once projections/store accept it (bead .2)
+  } = options;
 
+  // TODO: Pass adapter once projections.ts getActiveReservations() accepts it (bead .2)
   // Get current reservations to count what we're releasing
   const currentReservations = await getActiveReservations(
     projectPath,
@@ -477,6 +524,7 @@ export async function releaseSwarmFiles(
     releaseCount = currentReservations.length;
   }
 
+  // TODO: Pass adapter once store.ts appendEvent() accepts it (bead .2)
   // Create release event
   await appendEvent(
     createEvent("file_released", {
@@ -504,10 +552,16 @@ export async function releaseSwarmFiles(
 export async function acknowledgeSwarmMessage(
   options: AcknowledgeSwarmOptions,
 ): Promise<AcknowledgeSwarmResult> {
-  const { projectPath, messageId, agentName } = options;
+  const {
+    projectPath,
+    messageId,
+    agentName,
+    // adapter: Will be used once store.ts appendEvent() accepts it (bead .2)
+  } = options;
 
   const timestamp = Date.now();
 
+  // TODO: Pass adapter once store.ts appendEvent() accepts it (bead .2)
   await appendEvent(
     createEvent("message_acked", {
       project_key: projectPath,

@@ -10,6 +10,8 @@
  * All state changes go through events. Projections compute current state.
  */
 import { getDatabase, withTiming } from "./index";
+import type { DatabaseAdapter } from "../types/database";
+import { PGliteDatabaseAdapter, getOrCreateAdapter } from "../adapter";
 import {
   type AgentEvent,
   createEvent,
@@ -64,112 +66,55 @@ function parseTimestamp(timestamp: string): number {
 export async function appendEvent(
   event: AgentEvent,
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<AgentEvent & { id: number; sequence: number }> {
-  const db = await getDatabase(projectPath);
+  // If db provided (for testing), use it directly
+  if (db) {
+    const database = db;
+    // Extract common fields
+    const { type, project_key, timestamp, ...rest } = event;
 
-  // Extract common fields
-  const { type, project_key, timestamp, ...rest } = event;
-
-  console.log("[HiveMail] Appending event", {
-    type,
-    projectKey: project_key,
-    timestamp,
-  });
-
-  await db.exec("BEGIN");
-  try {
-    // Insert event
-    const result = await db.query<{ id: number; sequence: number }>(
-      `INSERT INTO events (type, project_key, timestamp, data)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, sequence`,
-      [type, project_key, timestamp, JSON.stringify(rest)],
-    );
-
-    const row = result.rows[0];
-    if (!row) {
-      throw new Error("Failed to insert event - no row returned");
-    }
-    const { id, sequence } = row;
-
-    console.log("[HiveMail] Event appended", {
+    console.log("[HiveMail] Appending event", {
       type,
-      id,
-      sequence,
       projectKey: project_key,
+      timestamp,
     });
 
-    // Update materialized views based on event type
-    console.debug("[HiveMail] Updating materialized views", { type, id });
-    await updateMaterializedViews(db, { ...event, id, sequence });
-
-    await db.exec("COMMIT");
-
-    return { ...event, id, sequence };
-  } catch (e) {
-    // FIX: Propagate rollback failures to prevent silent data corruption
-    let rollbackError: unknown = null;
+    await database.exec("BEGIN");
     try {
-      await db.exec("ROLLBACK");
-    } catch (rbErr) {
-      rollbackError = rbErr;
-      console.error("[HiveMail] ROLLBACK failed:", rbErr);
-    }
-
-    if (rollbackError) {
-      // Throw composite error so caller knows both failures
-      const compositeError = new Error(
-        `Transaction failed: ${e instanceof Error ? e.message : String(e)}. ` +
-          `ROLLBACK also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}. ` +
-          `Database may be in inconsistent state.`,
+      // Insert event
+      const result = await database.query<{ id: number; sequence: number }>(
+        `INSERT INTO events (type, project_key, timestamp, data)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, sequence`,
+        [type, project_key, timestamp, JSON.stringify(rest)],
       );
-      (compositeError as any).originalError = e;
-      (compositeError as any).rollbackError = rollbackError;
-      throw compositeError;
-    }
-    throw e;
-  }
-}
 
-/**
- * Append multiple events in a transaction
- */
-export async function appendEvents(
-  events: AgentEvent[],
-  projectPath?: string,
-): Promise<Array<AgentEvent & { id: number; sequence: number }>> {
-  return withTiming("appendEvents", async () => {
-    const db = await getDatabase(projectPath);
-    const results: Array<AgentEvent & { id: number; sequence: number }> = [];
-
-    await db.exec("BEGIN");
-    try {
-      for (const event of events) {
-        const { type, project_key, timestamp, ...rest } = event;
-
-        const result = await db.query<{ id: number; sequence: number }>(
-          `INSERT INTO events (type, project_key, timestamp, data)
-           VALUES ($1, $2, $3, $4)
-           RETURNING id, sequence`,
-          [type, project_key, timestamp, JSON.stringify(rest)],
-        );
-
-        const row = result.rows[0];
-        if (!row) {
-          throw new Error("Failed to insert event - no row returned");
-        }
-        const { id, sequence } = row;
-        const enrichedEvent = { ...event, id, sequence };
-
-        await updateMaterializedViews(db, enrichedEvent);
-        results.push(enrichedEvent);
+      const row = result.rows[0];
+      if (!row) {
+        throw new Error("Failed to insert event - no row returned");
       }
-      await db.exec("COMMIT");
+      const { id, sequence } = row;
+
+      console.log("[HiveMail] Event appended", {
+        type,
+        id,
+        sequence,
+        projectKey: project_key,
+      });
+
+      // Update materialized views based on event type
+      console.debug("[HiveMail] Updating materialized views", { type, id });
+      await updateMaterializedViews(database, { ...event, id, sequence });
+
+      await database.exec("COMMIT");
+
+      return { ...event, id, sequence };
     } catch (e) {
       // FIX: Propagate rollback failures to prevent silent data corruption
       let rollbackError: unknown = null;
       try {
-        await db.exec("ROLLBACK");
+        await database.exec("ROLLBACK");
       } catch (rbErr) {
         rollbackError = rbErr;
         console.error("[HiveMail] ROLLBACK failed:", rbErr);
@@ -188,7 +133,84 @@ export async function appendEvents(
       }
       throw e;
     }
+  }
 
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  return adapter.appendEvent(event);
+}
+
+/**
+ * Append multiple events in a transaction
+ */
+export async function appendEvents(
+  events: AgentEvent[],
+  projectPath?: string,
+  db?: DatabaseAdapter,
+): Promise<Array<AgentEvent & { id: number; sequence: number }>> {
+  return withTiming("appendEvents", async () => {
+    // If db provided (for testing), use it directly
+    if (db) {
+      const database = db;
+      const results: Array<AgentEvent & { id: number; sequence: number }> = [];
+
+      await database.exec("BEGIN");
+      try {
+        for (const event of events) {
+          const { type, project_key, timestamp, ...rest } = event;
+
+          const result = await database.query<{ id: number; sequence: number }>(
+            `INSERT INTO events (type, project_key, timestamp, data)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, sequence`,
+            [type, project_key, timestamp, JSON.stringify(rest)],
+          );
+
+          const row = result.rows[0];
+          if (!row) {
+            throw new Error("Failed to insert event - no row returned");
+          }
+          const { id, sequence } = row;
+          const enrichedEvent = { ...event, id, sequence };
+
+          await updateMaterializedViews(database, enrichedEvent);
+          results.push(enrichedEvent);
+        }
+        await database.exec("COMMIT");
+      } catch (e) {
+        // FIX: Propagate rollback failures to prevent silent data corruption
+        let rollbackError: unknown = null;
+        try {
+          await database.exec("ROLLBACK");
+        } catch (rbErr) {
+          rollbackError = rbErr;
+          console.error("[HiveMail] ROLLBACK failed:", rbErr);
+        }
+
+        if (rollbackError) {
+          // Throw composite error so caller knows both failures
+          const compositeError = new Error(
+            `Transaction failed: ${e instanceof Error ? e.message : String(e)}. ` +
+              `ROLLBACK also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}. ` +
+              `Database may be in inconsistent state.`,
+          );
+          (compositeError as any).originalError = e;
+          (compositeError as any).rollbackError = rollbackError;
+          throw compositeError;
+        }
+        throw e;
+      }
+
+      return results;
+    }
+
+    // Zero-config: use cached adapter (process events one by one)
+    const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+    const results: Array<AgentEvent & { id: number; sequence: number }> = [];
+    for (const event of events) {
+      const result = await adapter.appendEvent(event);
+      results.push(result);
+    }
     return results;
   });
 }
@@ -207,80 +229,88 @@ export async function readEvents(
     offset?: number;
   } = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Array<AgentEvent & { id: number; sequence: number }>> {
   return withTiming("readEvents", async () => {
-    const db = await getDatabase(projectPath);
+    // If db provided (for testing), use it directly
+    if (db) {
+      const database = db;
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    let paramIndex = 1;
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
 
-    if (options.projectKey) {
-      conditions.push(`project_key = $${paramIndex++}`);
-      params.push(options.projectKey);
+      if (options.projectKey) {
+        conditions.push(`project_key = $${paramIndex++}`);
+        params.push(options.projectKey);
+      }
+
+      if (options.types && options.types.length > 0) {
+        conditions.push(`type = ANY($${paramIndex++}`);
+        params.push(options.types);
+      }
+
+      if (options.since !== undefined) {
+        conditions.push(`timestamp >= $${paramIndex++}`);
+        params.push(options.since);
+      }
+
+      if (options.until !== undefined) {
+        conditions.push(`timestamp <= $${paramIndex++}`);
+        params.push(options.until);
+      }
+
+      if (options.afterSequence !== undefined) {
+        conditions.push(`sequence > $${paramIndex++}`);
+        params.push(options.afterSequence);
+      }
+
+      const whereClause =
+        conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+      let query = `
+        SELECT id, type, project_key, timestamp, sequence, data
+        FROM events
+        ${whereClause}
+        ORDER BY sequence ASC
+      `;
+
+      if (options.limit) {
+        query += ` LIMIT $${paramIndex++}`;
+        params.push(options.limit);
+      }
+
+      if (options.offset) {
+        query += ` OFFSET $${paramIndex++}`;
+        params.push(options.offset);
+      }
+
+      const result = await database.query<{
+        id: number;
+        type: string;
+        project_key: string;
+        timestamp: string;
+        sequence: number;
+        data: string;
+      }>(query, params);
+
+      return result.rows.map((row) => {
+        const data =
+          typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+        return {
+          id: row.id,
+          type: row.type as AgentEvent["type"],
+          project_key: row.project_key,
+          timestamp: parseTimestamp(row.timestamp as string),
+          sequence: row.sequence,
+          ...data,
+        } as AgentEvent & { id: number; sequence: number };
+      });
     }
 
-    if (options.types && options.types.length > 0) {
-      conditions.push(`type = ANY($${paramIndex++})`);
-      params.push(options.types);
-    }
-
-    if (options.since !== undefined) {
-      conditions.push(`timestamp >= $${paramIndex++}`);
-      params.push(options.since);
-    }
-
-    if (options.until !== undefined) {
-      conditions.push(`timestamp <= $${paramIndex++}`);
-      params.push(options.until);
-    }
-
-    if (options.afterSequence !== undefined) {
-      conditions.push(`sequence > $${paramIndex++}`);
-      params.push(options.afterSequence);
-    }
-
-    const whereClause =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-    let query = `
-      SELECT id, type, project_key, timestamp, sequence, data
-      FROM events
-      ${whereClause}
-      ORDER BY sequence ASC
-    `;
-
-    if (options.limit) {
-      query += ` LIMIT $${paramIndex++}`;
-      params.push(options.limit);
-    }
-
-    if (options.offset) {
-      query += ` OFFSET $${paramIndex++}`;
-      params.push(options.offset);
-    }
-
-    const result = await db.query<{
-      id: number;
-      type: string;
-      project_key: string;
-      timestamp: string;
-      sequence: number;
-      data: string;
-    }>(query, params);
-
-    return result.rows.map((row) => {
-      const data =
-        typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-      return {
-        id: row.id,
-        type: row.type as AgentEvent["type"],
-        project_key: row.project_key,
-        timestamp: parseTimestamp(row.timestamp as string),
-        sequence: row.sequence,
-        ...data,
-      } as AgentEvent & { id: number; sequence: number };
-    });
+    // Zero-config: use cached adapter
+    const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+    return adapter.readEvents(options);
   });
 }
 
@@ -290,17 +320,25 @@ export async function readEvents(
 export async function getLatestSequence(
   projectKey?: string,
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<number> {
-  const db = await getDatabase(projectPath);
+  // If db provided (for testing), use it directly
+  if (db) {
+    const database = db;
 
-  const query = projectKey
-    ? "SELECT MAX(sequence) as seq FROM events WHERE project_key = $1"
-    : "SELECT MAX(sequence) as seq FROM events";
+    const query = projectKey
+      ? "SELECT MAX(sequence) as seq FROM events WHERE project_key = $1"
+      : "SELECT MAX(sequence) as seq FROM events";
 
-  const params = projectKey ? [projectKey] : [];
-  const result = await db.query<{ seq: number | null }>(query, params);
+    const params = projectKey ? [projectKey] : [];
+    const result = await database.query<{ seq: number | null }>(query, params);
 
-  return result.rows[0]?.seq ?? 0;
+    return result.rows[0]?.seq ?? 0;
+  }
+
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  return adapter.getLatestSequence(projectKey);
 }
 
 /**
@@ -318,32 +356,33 @@ export async function replayEvents(
     clearViews?: boolean;
   } = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<{ eventsReplayed: number; duration: number }> {
   return withTiming("replayEvents", async () => {
     const startTime = Date.now();
-    const db = await getDatabase(projectPath);
+    const database = db ?? new PGliteDatabaseAdapter(await getDatabase(projectPath));
 
     // Optionally clear materialized views
     if (options.clearViews) {
       if (options.projectKey) {
         // Use parameterized queries to prevent SQL injection
-        await db.query(
+        await database.query(
           `DELETE FROM message_recipients WHERE message_id IN (
             SELECT id FROM messages WHERE project_key = $1
           )`,
           [options.projectKey],
         );
-        await db.query(`DELETE FROM messages WHERE project_key = $1`, [
+        await database.query(`DELETE FROM messages WHERE project_key = $1`, [
           options.projectKey,
         ]);
-        await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
+        await database.query(`DELETE FROM reservations WHERE project_key = $1`, [
           options.projectKey,
         ]);
-        await db.query(`DELETE FROM agents WHERE project_key = $1`, [
+        await database.query(`DELETE FROM agents WHERE project_key = $1`, [
           options.projectKey,
         ]);
       } else {
-        await db.exec(`
+        await database.exec(`
           DELETE FROM message_recipients;
           DELETE FROM messages;
           DELETE FROM reservations;
@@ -359,11 +398,12 @@ export async function replayEvents(
         afterSequence: options.fromSequence,
       },
       projectPath,
+      database,
     );
 
     // Replay each event
     for (const event of events) {
-      await updateMaterializedViews(db, event);
+      await updateMaterializedViews(database, event);
     }
 
     return {
@@ -412,32 +452,33 @@ export async function replayEventsBatched(
     clearViews?: boolean;
   } = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<{ eventsReplayed: number; duration: number }> {
   return withTiming("replayEventsBatched", async () => {
     const startTime = Date.now();
     const batchSize = options.batchSize ?? 1000;
     const fromSequence = options.fromSequence ?? 0;
-    const db = await getDatabase(projectPath);
+    const database = db ?? new PGliteDatabaseAdapter(await getDatabase(projectPath));
 
     // Optionally clear materialized views
     if (options.clearViews) {
-      await db.query(
+      await database.query(
         `DELETE FROM message_recipients WHERE message_id IN (
           SELECT id FROM messages WHERE project_key = $1
         )`,
         [projectKey],
       );
-      await db.query(`DELETE FROM messages WHERE project_key = $1`, [
+      await database.query(`DELETE FROM messages WHERE project_key = $1`, [
         projectKey,
       ]);
-      await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
+      await database.query(`DELETE FROM reservations WHERE project_key = $1`, [
         projectKey,
       ]);
-      await db.query(`DELETE FROM agents WHERE project_key = $1`, [projectKey]);
+      await database.query(`DELETE FROM agents WHERE project_key = $1`, [projectKey]);
     }
 
     // Get total count first
-    const countResult = await db.query<{ count: string }>(
+    const countResult = await database.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM events WHERE project_key = $1 AND sequence > $2`,
       [projectKey, fromSequence],
     );
@@ -460,13 +501,14 @@ export async function replayEventsBatched(
           offset,
         },
         projectPath,
+        database,
       );
 
       if (events.length === 0) break;
 
       // Update materialized views for this batch
       for (const event of events) {
-        await updateMaterializedViews(db, event);
+        await updateMaterializedViews(database, event);
       }
 
       processed += events.length;
@@ -500,7 +542,7 @@ export async function replayEventsBatched(
  * Views are denormalized for fast reads.
  */
 async function updateMaterializedViews(
-  db: Awaited<ReturnType<typeof getDatabase>>,
+  db: DatabaseAdapter,
   event: AgentEvent & { id: number; sequence: number },
 ): Promise<void> {
   try {
@@ -570,7 +612,7 @@ async function updateMaterializedViews(
 }
 
 async function handleAgentRegistered(
-  db: Awaited<ReturnType<typeof getDatabase>>,
+  db: DatabaseAdapter,
   event: AgentRegisteredEvent & { id: number; sequence: number },
 ): Promise<void> {
   await db.query(
@@ -593,7 +635,7 @@ async function handleAgentRegistered(
 }
 
 async function handleMessageSent(
-  db: Awaited<ReturnType<typeof getDatabase>>,
+  db: DatabaseAdapter,
   event: MessageSentEvent & { id: number; sequence: number },
 ): Promise<void> {
   console.log("[HiveMail] Handling message sent event", {
@@ -646,7 +688,7 @@ async function handleMessageSent(
 }
 
 async function handleFileReserved(
-  db: Awaited<ReturnType<typeof getDatabase>>,
+  db: DatabaseAdapter,
   event: FileReservedEvent & { id: number; sequence: number },
 ): Promise<void> {
   console.log("[HiveMail] Handling file reservation event", {
@@ -706,7 +748,7 @@ async function handleFileReserved(
 }
 
 async function handleFileReleased(
-  db: Awaited<ReturnType<typeof getDatabase>>,
+  db: DatabaseAdapter,
   event: AgentEvent & { id: number; sequence: number },
 ): Promise<void> {
   if (event.type !== "file_released") return;
@@ -750,18 +792,39 @@ export async function registerAgent(
     taskDescription?: string;
   } = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<AgentRegisteredEvent & { id: number; sequence: number }> {
-  const event = createEvent("agent_registered", {
+  // If db provided (for testing), use appendEvent with db
+  if (db) {
+    const event = createEvent("agent_registered", {
+      project_key: projectKey,
+      agent_name: agentName,
+      program: options.program || "opencode",
+      model: options.model || "unknown",
+      task_description: options.taskDescription,
+    });
+
+    return appendEvent(event, projectPath, db) as Promise<
+      AgentRegisteredEvent & { id: number; sequence: number }
+    >;
+  }
+
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  const agentInfo = await adapter.registerAgent(projectKey, agentName, options);
+  
+  // Return event format for backward compatibility
+  return {
+    type: "agent_registered",
     project_key: projectKey,
     agent_name: agentName,
     program: options.program || "opencode",
     model: options.model || "unknown",
     task_description: options.taskDescription,
-  });
-
-  return appendEvent(event, projectPath) as Promise<
-    AgentRegisteredEvent & { id: number; sequence: number }
-  >;
+    timestamp: agentInfo.registered_at,
+    id: agentInfo.id,
+    sequence: agentInfo.id, // Use id as sequence for compatibility
+  } as AgentRegisteredEvent & { id: number; sequence: number };
 }
 
 /**
@@ -779,8 +842,40 @@ export async function sendMessage(
     ackRequired?: boolean;
   } = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<MessageSentEvent & { id: number; sequence: number }> {
-  const event = createEvent("message_sent", {
+  // If db provided (for testing), use appendEvent with db
+  if (db) {
+    const event = createEvent("message_sent", {
+      project_key: projectKey,
+      from_agent: fromAgent,
+      to_agents: toAgents,
+      subject,
+      body,
+      thread_id: options.threadId,
+      importance: options.importance || "normal",
+      ack_required: options.ackRequired || false,
+    });
+
+    return appendEvent(event, projectPath, db) as Promise<
+      MessageSentEvent & { id: number; sequence: number }
+    >;
+  }
+
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  const result = await adapter.sendMessage(
+    projectKey,
+    fromAgent,
+    toAgents,
+    subject,
+    body,
+    options,
+  );
+
+  // Return event format for backward compatibility
+  return {
+    type: "message_sent",
     project_key: projectKey,
     from_agent: fromAgent,
     to_agents: toAgents,
@@ -789,11 +884,10 @@ export async function sendMessage(
     thread_id: options.threadId,
     importance: options.importance || "normal",
     ack_required: options.ackRequired || false,
-  });
-
-  return appendEvent(event, projectPath) as Promise<
-    MessageSentEvent & { id: number; sequence: number }
-  >;
+    timestamp: Date.now(),
+    id: result.messageId,
+    sequence: result.messageId, // Use messageId as sequence for compatibility
+  } as MessageSentEvent & { id: number; sequence: number };
 }
 
 /**
@@ -809,6 +903,7 @@ export async function reserveFiles(
     ttlSeconds?: number;
   } = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<FileReservedEvent & { id: number; sequence: number }> {
   const ttlSeconds = options.ttlSeconds || 3600;
   const event = createEvent("file_reserved", {
@@ -821,7 +916,7 @@ export async function reserveFiles(
     expires_at: Date.now() + ttlSeconds * 1000,
   });
 
-  return appendEvent(event, projectPath) as Promise<
+  return appendEvent(event, projectPath, db) as Promise<
     FileReservedEvent & { id: number; sequence: number }
   >;
 }

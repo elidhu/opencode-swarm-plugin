@@ -221,3 +221,11 @@ export {
   type GuardrailResult,
   type GuardrailMetrics,
 } from "./output-guardrails";
+
+export {
+  getOutcomeAdapter,
+  resetOutcomeAdapter,
+  OutcomeAdapter,
+  UnifiedOutcomeSchema,
+  type UnifiedOutcome,
+} from "./outcomes";

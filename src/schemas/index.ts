@@ -31,6 +31,12 @@
  * - `AgentProgressSchema` - Individual agent status
  * - `SpawnedAgentSchema` - Spawned agent metadata
  *
+ * ## Checkpoint Schemas (Recovery System)
+ * - `SwarmBeadContextSchema` - Complete agent checkpoint state
+ * - `RecoveryStateSchema` - Recovery state enum
+ * - `DecompositionStrategySchema` - Strategy used for decomposition
+ * - `ProgressMilestoneSchema` - Progress milestone tracking
+ *
  * @module schemas
  */
 
@@ -141,3 +147,21 @@ export {
   type QueryMandatesArgs,
   type ScoreCalculationResult,
 } from "./mandate";
+
+// Checkpoint schemas
+export {
+  RecoveryStateSchema,
+  DecompositionStrategySchema,
+  ProgressMilestoneSchema,
+  SwarmBeadContextSchema,
+  CheckpointCreateArgsSchema,
+  CheckpointRecoverArgsSchema,
+  CheckpointRecoveryResultSchema,
+  type RecoveryState,
+  type DecompositionStrategy,
+  type ProgressMilestone,
+  type SwarmBeadContext,
+  type CheckpointCreateArgs,
+  type CheckpointRecoverArgs,
+  type CheckpointRecoveryResult,
+} from "./checkpoint";

@@ -423,6 +423,209 @@ const mockEmail = mock<EmailService>();
 expect(mockEmail.send).toHaveBeenCalledWith(expectedEmail);
 ```
 
+## Adapter Pattern for Testing
+
+### The Problem
+
+- **Shared State**: PGLite tests share database state between test runs
+- **Slow Execution**: Real database operations slow down test suites
+- **Flaky Tests**: State pollution causes intermittent failures
+- **Serial Execution**: Can't safely run tests in parallel
+
+### The Solution: In-Memory Adapter
+
+Use the adapter pattern to swap database implementations. Production code uses real database, tests use in-memory fake.
+
+**Key Insight**: The adapter interface is your seam - change behavior at the enabling point (adapter creation) without modifying code.
+
+### Pattern: Isolated Test Setup
+
+```typescript
+import { createInMemorySwarmMail } from '../streams/test-utils';
+
+describe('MyFeature', () => {
+  let adapter: SwarmMailAdapter;
+  let cleanup: () => Promise<void>;
+  
+  beforeEach(async () => {
+    // Each test gets isolated adapter instance
+    const result = await createInMemorySwarmMail();
+    adapter = result.adapter;
+    cleanup = result.cleanup;
+  });
+  
+  afterEach(async () => {
+    // Clean up resources
+    await cleanup();
+  });
+  
+  it('should send message successfully', async () => {
+    // Test with isolated adapter - no shared state
+    await adapter.sendMessage(
+      'test-project',
+      'agent-1',
+      ['agent-2'],
+      'Test Subject',
+      'Test Body'
+    );
+    
+    // Verify behavior
+    const inbox = await adapter.getInbox('test-project', 'agent-2');
+    expect(inbox).toHaveLength(1);
+  });
+});
+```
+
+### Pattern: Factory Function with Mode
+
+```typescript
+import { createSwarmMailAdapter } from './adapter';
+
+// Production: PGLite-backed adapter (persistent)
+const prodAdapter = await createSwarmMailAdapter({
+  projectPath: '/path/to/project'
+});
+
+// Testing: In-memory adapter (fast, isolated)
+const testAdapter = await createSwarmMailAdapter({
+  inMemory: true
+});
+
+// Custom: Inject your own adapter (dependency injection)
+const customAdapter = await createSwarmMailAdapter({
+  dbOverride: new MyCustomDatabaseAdapter()
+});
+```
+
+### Pattern: Interface Extraction
+
+Define a common interface that both adapters implement:
+
+```typescript
+interface DatabaseAdapter {
+  query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>>;
+  exec(sql: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+// Production implementation
+class PGliteDatabaseAdapter implements DatabaseAdapter {
+  constructor(private db: PGlite) {}
+  
+  async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    return await this.db.query<T>(sql, params);
+  }
+  
+  async exec(sql: string): Promise<void> {
+    await this.db.exec(sql);
+  }
+  
+  async close(): Promise<void> {
+    await this.db.close();
+  }
+}
+
+// Test implementation
+class InMemoryDatabaseAdapter implements DatabaseAdapter {
+  private tables = new Map<string, Array<Record<string, any>>>();
+  
+  async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    // Simple in-memory SQL simulation
+    // No parsing, just pattern matching
+    return this.handleQuery<T>(sql, params);
+  }
+  
+  async exec(sql: string): Promise<void> {
+    // Handle schema changes in memory
+    await this.handleExec(sql);
+  }
+  
+  async close(): Promise<void> {
+    this.tables.clear();
+  }
+}
+```
+
+### Benefits
+
+- **10x Faster**: In-memory operations vs. disk-based database
+- **Perfect Isolation**: Each test has its own adapter instance
+- **Parallel Execution**: No shared state enables parallel test runs
+- **No Dependencies**: Tests don't require PGLite or filesystem access
+- **Simplified Setup**: No database migrations or cleanup between tests
+
+### When to Use
+
+- **Unit Tests**: Use in-memory adapter for fast, isolated tests
+- **Integration Tests**: Use PGLite adapter to test against real database
+- **CI/CD**: In-memory tests run faster, reducing build times
+- **Local Development**: Fast feedback loop during TDD
+
+### Trade-offs
+
+In-memory adapter has limitations:
+
+- **No SQL Parsing**: Uses simple pattern matching, not full SQL parser
+- **Limited Query Support**: No JOINs, subqueries, or complex operations
+- **Behavior Differences**: May not catch database-specific issues
+
+**Recommendation**: Use in-memory for unit tests, real database for integration tests.
+
+### Real-World Example
+
+From `src/adapter.test.ts`:
+
+```typescript
+describe("InMemoryDatabaseAdapter", () => {
+  let db: DatabaseAdapter;
+
+  beforeEach(() => {
+    // Fresh adapter for each test
+    db = new InMemoryDatabaseAdapter();
+  });
+
+  afterEach(async () => {
+    await db.close();
+  });
+
+  it("should insert and return SERIAL id", async () => {
+    await db.exec(
+      "CREATE TABLE events (id SERIAL PRIMARY KEY, type TEXT)"
+    );
+    
+    const result = await db.query<{ id: number }>(
+      "INSERT INTO events (type) VALUES ($1) RETURNING id",
+      ["test"]
+    );
+
+    expect(result.rows[0].id).toBe(1);
+  });
+  
+  it("should handle transactions", async () => {
+    await db.exec("CREATE TABLE accounts (id SERIAL, balance INTEGER)");
+    await db.query("INSERT INTO accounts (balance) VALUES ($1)", [100]);
+    
+    // Transaction: all-or-nothing
+    await db.exec("BEGIN");
+    await db.query("UPDATE accounts SET balance = $1", [150]);
+    await db.exec("ROLLBACK");
+    
+    // Balance should be unchanged
+    const result = await db.query<{ balance: number }>(
+      "SELECT balance FROM accounts WHERE id = 1"
+    );
+    expect(result.rows[0].balance).toBe(100);
+  });
+});
+```
+
+### See Also
+
+- `src/adapter.ts` - Full adapter implementation
+- `src/streams/test-utils.ts` - Test utility functions
+- `src/adapter.test.ts` - Usage examples and test patterns
+- `references/dependency-breaking-catalog.md` - Database Adapter Pattern seam
+
 ## References
 
 For detailed patterns and examples:

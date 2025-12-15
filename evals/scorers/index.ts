@@ -246,3 +246,12 @@ export const instructionClarity = createScorer({
     }
   },
 });
+
+// Re-export metric scorers from metrics.ts
+export {
+  scopeAccuracyScorer,
+  timeBalanceScorer,
+  fileOverlapScorer,
+  successRateScorer,
+  overallQualityScorer,
+} from "./metrics.js";

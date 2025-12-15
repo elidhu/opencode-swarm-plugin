@@ -57,6 +57,7 @@ import {
   type StrikeStorage,
 } from "./learning";
 import { getStorage } from "./storage";
+import { getOutcomeAdapter, type UnifiedOutcome } from "./outcomes";
 import {
   checkAllTools,
   formatToolAvailability,
@@ -64,6 +65,17 @@ import {
   warnMissingTool,
 } from "./tool-availability";
 import { listSkills } from "./skills";
+import {
+  saveCheckpoint,
+  loadCheckpoint,
+  getMilestone,
+  shouldAutoCheckpoint,
+} from "./checkpoint";
+import {
+  type SwarmBeadContext,
+  type CheckpointRecoverArgs,
+  type DecompositionStrategy,
+} from "./schemas/checkpoint";
 
 // ============================================================================
 // Helper Functions
@@ -715,6 +727,58 @@ export const hive_progress = tool({
       importance: args.status === "blocked" ? "high" : "normal",
     });
 
+    // Auto-checkpoint at 25/50/75% milestones
+    if (args.progress_percent !== undefined) {
+      // Query previous checkpoint to detect milestone crossing
+      try {
+        const previousCheckpoint = await loadCheckpoint(
+          {
+            epic_id: epicId,
+            bead_id: args.bead_id,
+            agent_name: args.agent_name,
+          },
+          args.project_key,
+        );
+
+        const previousPercent = previousCheckpoint.context?.progress_percent || 0;
+        const currentPercent = args.progress_percent;
+
+        if (shouldAutoCheckpoint(currentPercent, previousPercent)) {
+          const milestone = getMilestone(currentPercent);
+          console.log(
+            `[hive_progress] Auto-checkpoint triggered at ${currentPercent}% (${milestone})`,
+          );
+
+          // Fire-and-forget checkpoint (non-blocking)
+          saveCheckpoint(
+            {
+              epic_id: epicId,
+              bead_id: args.bead_id,
+              agent_name: args.agent_name,
+              task_description: `Progress update at ${currentPercent}%`,
+              files: [], // Not available in progress report
+              strategy: "auto",
+              progress_percent: currentPercent,
+              last_milestone: milestone,
+              files_touched: args.files_touched || [],
+            },
+            args.project_key,
+          ).catch((error) => {
+            console.warn(
+              `[hive_progress] Auto-checkpoint failed:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+        }
+      } catch (error) {
+        // Non-fatal - checkpoint query failed
+        console.warn(
+          `[hive_progress] Failed to query previous checkpoint for auto-checkpoint:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
     return `Progress reported: ${args.status}${args.progress_percent !== undefined ? ` (${args.progress_percent}%)` : ""}`;
   },
 });
@@ -843,6 +907,9 @@ export const hive_complete = tool({
       ),
   },
   async execute(args) {
+    // Track timing for outcome recording
+    const completedAt = Date.now();
+
     // Run Verification Gate unless explicitly skipped
     let verificationResult: VerificationGateResult | null = null;
 
@@ -995,6 +1062,34 @@ export const hive_complete = tool({
       );
     }
 
+    // Record outcome to unified outcome adapter (writes to both learning and eval-capture)
+    let outcomeRecorded = false;
+    try {
+      const outcome: UnifiedOutcome = {
+        bead_id: args.bead_id,
+        epic_id: epicId,
+        duration_ms: 0, // Unknown - would need bead start time tracking
+        error_count: 0, // Success case
+        retry_count: 0, // Not tracked in current flow
+        success: true,
+        files_touched: args.files_touched || [],
+        started_at: completedAt, // Unknown - using completed_at as fallback
+        completed_at: completedAt,
+        title: args.summary,
+        agent_name: args.agent_name,
+        // strategy and failure_mode not available in current flow
+      };
+
+      const adapter = getOutcomeAdapter();
+      await adapter.recordOutcome(outcome);
+      outcomeRecorded = true;
+      console.log(`[hive] Recorded outcome for ${args.bead_id} to both systems`);
+    } catch (error) {
+      console.warn(
+        `[hive] Failed to record outcome: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     // Build success response with memory storage status
     const response = {
       success: true,
@@ -1003,6 +1098,7 @@ export const hive_complete = tool({
       reservations_released: true,
       message_sent: true,
       memory_stored: memoryStored,
+      outcome_recorded: outcomeRecorded,
       verification_gate: verificationResult
         ? {
             passed: true,
@@ -1513,6 +1609,188 @@ export const hive_check_strikes = tool({
 });
 
 /**
+ * Save a checkpoint for crash recovery
+ *
+ * Stores the current agent state (files, progress, directives) to enable
+ * recovery after crashes. Uses dual-write pattern:
+ * 1. Event stream for audit trail
+ * 2. Table for fast O(1) queries
+ *
+ * Auto-checkpointing happens at 25/50/75% via hive_progress.
+ */
+export const hive_checkpoint = tool({
+  description:
+    "Save checkpoint for crash recovery. Stores agent state (files, progress, directives) for resumption.",
+  args: {
+    project_key: tool.schema.string().describe("Project path"),
+    agent_name: tool.schema.string().describe("Your Agent Mail name"),
+    epic_id: tool.schema.string().describe("Epic bead ID"),
+    bead_id: tool.schema.string().describe("Subtask bead ID"),
+    task_description: tool.schema.string().describe("Task description"),
+    files: tool.schema
+      .array(tool.schema.string())
+      .describe("Files this agent is modifying"),
+    strategy: tool.schema
+      .enum(["file-based", "feature-based", "risk-based", "auto"])
+      .describe("Decomposition strategy used"),
+    shared_context: tool.schema
+      .string()
+      .optional()
+      .describe("Shared context from decomposition"),
+    directives: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Progress directives and instructions"),
+    progress_percent: tool.schema
+      .number()
+      .min(0)
+      .max(100)
+      .default(0)
+      .describe("Current progress percentage (0-100)"),
+    files_touched: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Files modified so far"),
+  },
+  async execute(args) {
+    try {
+      const context = await saveCheckpoint(
+        {
+          epic_id: args.epic_id,
+          bead_id: args.bead_id,
+          agent_name: args.agent_name,
+          task_description: args.task_description,
+          files: args.files,
+          strategy: args.strategy as DecompositionStrategy,
+          shared_context: args.shared_context,
+          directives: args.directives,
+          progress_percent: args.progress_percent || 0,
+          last_milestone: getMilestone(args.progress_percent || 0),
+          files_touched: args.files_touched,
+        },
+        args.project_key,
+      );
+
+      return JSON.stringify(
+        {
+          success: true,
+          checkpoint_id: `${args.bead_id}-${context.checkpointed_at}`,
+          bead_id: args.bead_id,
+          progress_percent: context.progress_percent,
+          milestone: context.last_milestone,
+          checkpointed_at: context.checkpointed_at,
+          message: `Checkpoint saved at ${context.progress_percent}%`,
+        },
+        null,
+        2,
+      );
+    } catch (error) {
+      return JSON.stringify(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        null,
+        2,
+      );
+    }
+  },
+});
+
+/**
+ * Recover from a checkpoint after crash
+ *
+ * Queries the latest checkpoint for a bead and returns the saved context.
+ * If no checkpoint exists, returns fresh_start=true.
+ *
+ * Records a checkpoint_recovered event for audit trail.
+ */
+export const hive_recover = tool({
+  description:
+    "Recover from checkpoint after crash. Returns latest saved context or indicates fresh start.",
+  args: {
+    project_key: tool.schema.string().describe("Project path"),
+    epic_id: tool.schema.string().describe("Epic bead ID"),
+    bead_id: tool.schema.string().describe("Subtask bead ID"),
+    agent_name: tool.schema
+      .string()
+      .optional()
+      .describe("Optional agent name filter"),
+  },
+  async execute(args) {
+    try {
+      const result = await loadCheckpoint(
+        {
+          epic_id: args.epic_id,
+          bead_id: args.bead_id,
+          agent_name: args.agent_name,
+        },
+        args.project_key,
+      );
+
+      if (!result.success) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: result.error,
+            fresh_start: false,
+          },
+          null,
+          2,
+        );
+      }
+
+      if (result.fresh_start) {
+        return JSON.stringify(
+          {
+            success: true,
+            fresh_start: true,
+            message: "No checkpoint found - starting fresh",
+          },
+          null,
+          2,
+        );
+      }
+
+      const context = result.context!;
+
+      return JSON.stringify(
+        {
+          success: true,
+          fresh_start: false,
+          context: {
+            bead_id: context.bead_id,
+            epic_id: context.epic_id,
+            agent_name: context.agent_name,
+            task_description: context.task_description,
+            files: context.files,
+            strategy: context.strategy,
+            shared_context: context.shared_context,
+            directives: context.directives,
+            progress_percent: context.progress_percent,
+            last_milestone: context.last_milestone,
+            files_touched: context.files_touched,
+            checkpointed_at: context.checkpointed_at,
+          },
+          message: `Recovered from ${context.progress_percent}% (${context.last_milestone || "no milestone"})`,
+        },
+        null,
+        2,
+      );
+    } catch (error) {
+      return JSON.stringify(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        null,
+        2,
+      );
+    }
+  },
+});
+
+/**
  * Learn from completed work and optionally create a skill
  *
  * This tool helps agents reflect on patterns, best practices, or domain
@@ -1730,5 +2008,7 @@ export const orchestrateTools = {
   hive_get_error_context,
   hive_resolve_error,
   hive_check_strikes,
+  hive_checkpoint,
+  hive_recover,
   hive_learn,
 };

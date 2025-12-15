@@ -306,6 +306,81 @@ beads_sync()
 gh pr create --title "feat: <epic title>" --body "## Summary\n<bullets>\n\n## Beads\n<list>"
 ```
 
+## Checkpoint & Recovery Tools
+
+### hive_checkpoint
+Save progress and share discoveries with other agents.
+
+**Parameters:**
+- project_key: Project path
+- agent_name: Your agent name
+- epic_id: Epic bead ID
+- bead_id: Current bead ID
+- task_description: Task description
+- files: Files this agent is modifying
+- strategy: Decomposition strategy used
+- shared_context: (optional) Shared context from decomposition
+- directives: (optional) Progress directives and instructions
+- progress_percent: Current progress percentage (0-100, default: 0)
+- files_touched: (optional) Files modified so far
+
+**Example:**
+```
+hive_checkpoint(
+  project_key="/path/to/project",
+  agent_name="Worker1",
+  epic_id="epic-123",
+  bead_id="epic-123.1",
+  task_description="Implement auth endpoints",
+  files=["src/auth/routes.ts"],
+  strategy="feature-based",
+  progress_percent=50,
+  files_touched=["src/auth/routes.ts"],
+  directives=["API requires auth header", "Use v2 endpoint not v1"]
+)
+```
+
+**Use Cases:**
+- Share discoveries with other agents via directives
+- Manual checkpoint at critical points
+- Record context for recovery after crash
+
+### hive_recover
+Check for and load previous checkpoint.
+
+**Parameters:**
+- project_key: Project path
+- epic_id: Epic bead ID
+- bead_id: Bead to recover
+- agent_name: (optional) Agent name filter
+
+**Returns:**
+- success: Whether recovery succeeded
+- fresh_start: true if no checkpoint exists
+- context: Previous checkpoint data (if exists)
+
+**Example:**
+```typescript
+const result = await hive_recover(
+  project_key="/path/to/project",
+  epic_id="epic-123",
+  bead_id="epic-123.1",
+  agent_name="Worker1"
+);
+
+if (result.fresh_start) {
+  // Start from beginning
+} else {
+  // Resume from result.context.progress_percent
+  // Apply result.context.directives
+}
+```
+
+**Use Cases:**
+- Resume after agent crash
+- Check for shared context from other agents
+- Recover progress state
+
 ## Swarm Mail Quick Reference
 
 | Tool                     | Purpose                             |

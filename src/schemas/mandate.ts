@@ -73,6 +73,17 @@ export const MandateEntrySchema = z.object({
   tags: z.array(z.string()).default([]),
   /** Optional metadata (e.g., code language for snippets) */
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * Source of this mandate entry
+   * - user: Explicitly filed by user
+   * - agent: Filed by agent decision
+   * - directive: Auto-promoted from successful task directive
+   */
+  source: z.enum(["user", "agent", "directive"]).optional(),
+  /**
+   * Reference to source entity (e.g., bead_id if from directive)
+   */
+  source_ref: z.string().optional(),
 });
 export type MandateEntry = z.infer<typeof MandateEntrySchema>;
 
@@ -174,6 +185,8 @@ export const CreateMandateArgsSchema = z.object({
   content_type: MandateContentTypeSchema,
   tags: z.array(z.string()).default([]),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  source: z.enum(["user", "agent", "directive"]).optional(),
+  source_ref: z.string().optional(),
 });
 export type CreateMandateArgs = z.infer<typeof CreateMandateArgsSchema>;
 

@@ -25,6 +25,7 @@ import {
   STRATEGY_DECOMPOSITION_PROMPT,
 } from "./hive-prompts";
 import { getStorage } from "./storage";
+import { captureDecomposition } from "./eval-capture";
 
 // ============================================================================
 // Prompts imported from hive-prompts.ts (canonical location)
@@ -260,6 +261,7 @@ export const hive_decompose = tool({
  * Validate a decomposition response from an agent
  *
  * Use this after the agent responds to hive:decompose to validate the structure.
+ * Optionally captures decomposition for eval tracking.
  */
 export const hive_validate_decomposition = tool({
   description: "Validate a decomposition response against BeadTreeSchema",
@@ -267,6 +269,31 @@ export const hive_validate_decomposition = tool({
     response: tool.schema
       .string()
       .describe("JSON response from agent (BeadTree format)"),
+    capture_eval: tool.schema
+      .boolean()
+      .optional()
+      .describe("Capture this decomposition for evaluation (default: false)"),
+    task: tool.schema
+      .string()
+      .optional()
+      .describe("Original task description (required if capture_eval=true)"),
+    strategy: tool.schema
+      .string()
+      .optional()
+      .describe("Strategy used (required if capture_eval=true)"),
+    epic_id: tool.schema
+      .string()
+      .optional()
+      .describe("Epic bead ID (required if capture_eval=true)"),
+    context: tool.schema
+      .string()
+      .optional()
+      .describe("Additional context for eval capture"),
+    max_subtasks: tool.schema
+      .number()
+      .int()
+      .optional()
+      .describe("Max subtasks parameter for eval capture"),
   },
   async execute(args) {
     try {
@@ -324,6 +351,32 @@ export const hive_validate_decomposition = tool({
         validated.subtasks,
       );
 
+      // Capture eval data if requested
+      let evalRecordId: string | undefined;
+      if (args.capture_eval) {
+        if (!args.task || !args.strategy || !args.epic_id) {
+          console.warn(
+            "[hive-decompose] capture_eval=true but missing required args (task, strategy, epic_id). Skipping eval capture.",
+          );
+        } else {
+          try {
+            evalRecordId = await captureDecomposition({
+              task: args.task,
+              strategy: args.strategy as DecompositionStrategy,
+              beadTree: validated,
+              epicId: args.epic_id,
+              context: args.context,
+              maxSubtasks: args.max_subtasks,
+            });
+            console.log(`[hive-decompose] Captured eval record: ${evalRecordId}`);
+          } catch (error) {
+            console.warn(
+              `[hive-decompose] Failed to capture eval record: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      }
+
       return JSON.stringify(
         {
           valid: true,
@@ -345,6 +398,8 @@ export const hive_validate_decomposition = tool({
                   hint: "Review these potential conflicts between subtask instructions",
                 }
               : undefined,
+          eval_captured: args.capture_eval,
+          eval_record_id: evalRecordId,
         },
         null,
         2,

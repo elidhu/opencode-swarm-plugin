@@ -176,15 +176,84 @@ hivemail_send({
 });
 ```
 
+## Quick Reference
+
+### Worker Startup Pattern (NEW)
+1. **hivemail_init** - Initialize session first
+2. **hive_recover** - Check for checkpoint
+3. If checkpoint exists, resume from progress_percent
+4. If fresh_start, begin from scratch
+
+**Example:**
+```typescript
+// 1. Initialize
+await hivemail_init({ project_path: "$PWD", task_description: "Task X" });
+
+// 2. Check for checkpoint
+const recovery = await hive_recover({
+  project_key: "$PWD",
+  epic_id: "epic-123",
+  bead_id: "epic-123.1",
+  agent_name: "Worker1"
+});
+
+// 3. Resume or start fresh
+if (recovery.fresh_start) {
+  console.log("Starting fresh");
+} else {
+  console.log(`Resuming from ${recovery.context.progress_percent}%`);
+  // Apply directives from recovery.context.directives
+}
+```
+
+### Progress Reporting (UPDATED)
+- **hive_progress** - Reports progress AND auto-checkpoints at milestones (25%, 50%, 75%)
+- **hive_checkpoint** - Manual checkpoint for sharing directives or critical points
+
+**Auto-Checkpoint Behavior:**
+```typescript
+// This automatically checkpoints at 25%, 50%, 75%
+await hive_progress({
+  project_key: "$PWD",
+  agent_name: "Worker1",
+  bead_id: "epic-123.1",
+  status: "in_progress",
+  progress_percent: 50,  // Triggers auto-checkpoint at milestone
+  files_touched: ["src/foo.ts"]
+});
+```
+
+### Sharing Discoveries
+Use directives to pass context to other agents:
+```typescript
+hive_checkpoint({
+  project_key: "$PWD",
+  agent_name: "Worker1",
+  epic_id: "epic-123",
+  bead_id: "epic-123.1",
+  task_description: "Implement auth",
+  files: ["src/auth/routes.ts"],
+  strategy: "feature-based",
+  progress_percent: 50,
+  directives: [
+    "Found: API rate limit is 100/min",
+    "Use /v2/ endpoint instead of /v1/",
+    "Auth header format: Bearer <token>"
+  ]
+});
+```
+
 ## Best Practices
 
 1. **Initialize Swarm Mail first** - Always call `hivemail_init` before any work
-2. **Small, focused subtasks** - Each subtask should be completable in one agent session
-3. **Clear boundaries** - Define exactly what files/modules each subtask touches
-4. **Explicit handoffs** - When one task enables another, communicate clearly
-5. **Graceful failures** - If a subtask fails, don't block the whole swarm
-6. **Progress updates** - Use beads to track subtask status
-7. **Load relevant skills** - Workers should call `skills_use()` based on their task type:
+2. **Check for recovery** - Use `hive_recover` at startup to resume crashed tasks
+3. **Small, focused subtasks** - Each subtask should be completable in one agent session
+4. **Clear boundaries** - Define exactly what files/modules each subtask touches
+5. **Explicit handoffs** - When one task enables another, communicate clearly
+6. **Graceful failures** - If a subtask fails, don't block the whole swarm
+7. **Progress updates** - Use `hive_progress` for tracking (auto-checkpoints at milestones)
+8. **Share discoveries** - Use directives in `hive_checkpoint` to help other agents
+9. **Load relevant skills** - Workers should call `skills_use()` based on their task type:
    - Testing work → `skills_use(name="testing-patterns")`
    - Architecture decisions → `skills_use(name="system-design")`
    - CLI development → `skills_use(name="cli-builder")`

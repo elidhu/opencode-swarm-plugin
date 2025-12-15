@@ -12,6 +12,8 @@
  * - checkConflicts: Detect reservation conflicts
  */
 import { getDatabase } from "./index";
+import type { DatabaseAdapter } from "../types/database";
+import { PGliteDatabaseAdapter, getOrCreateAdapter } from "../adapter";
 import { minimatch } from "minimatch";
 
 // ============================================================================
@@ -68,18 +70,37 @@ export interface Conflict {
 export async function getAgents(
   projectKey: string,
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Agent[]> {
-  const db = await getDatabase(projectPath);
+  // If db provided (for testing), use it directly
+  if (db) {
+    const database = db;
 
-  const result = await db.query<Agent>(
-    `SELECT id, name, program, model, task_description, registered_at, last_active_at
-     FROM agents
-     WHERE project_key = $1
-     ORDER BY registered_at ASC`,
-    [projectKey],
-  );
+    const result = await database.query<Agent>(
+      `SELECT id, name, program, model, task_description, registered_at, last_active_at
+       FROM agents
+       WHERE project_key = $1
+       ORDER BY registered_at ASC`,
+      [projectKey],
+    );
 
-  return result.rows;
+    return result.rows;
+  }
+
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  const agentInfos = await adapter.listAgents(projectKey);
+  
+  // Map AgentInfo to Agent (convert undefined to null)
+  return agentInfos.map((info) => ({
+    id: info.id,
+    name: info.name,
+    program: info.program,
+    model: info.model,
+    task_description: info.task_description ?? null,
+    registered_at: info.registered_at,
+    last_active_at: info.last_active_at,
+  }));
 }
 
 /**
@@ -89,17 +110,38 @@ export async function getAgent(
   projectKey: string,
   agentName: string,
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Agent | null> {
-  const db = await getDatabase(projectPath);
+  // If db provided (for testing), use it directly
+  if (db) {
+    const database = db;
 
-  const result = await db.query<Agent>(
-    `SELECT id, name, program, model, task_description, registered_at, last_active_at
-     FROM agents
-     WHERE project_key = $1 AND name = $2`,
-    [projectKey, agentName],
-  );
+    const result = await database.query<Agent>(
+      `SELECT id, name, program, model, task_description, registered_at, last_active_at
+       FROM agents
+       WHERE project_key = $1 AND name = $2`,
+      [projectKey, agentName],
+    );
 
-  return result.rows[0] ?? null;
+    return result.rows[0] ?? null;
+  }
+
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  const info = await adapter.getAgent(projectKey, agentName);
+  
+  if (!info) return null;
+  
+  // Map AgentInfo to Agent (convert undefined to null)
+  return {
+    id: info.id,
+    name: info.name,
+    program: info.program,
+    model: info.model,
+    task_description: info.task_description ?? null,
+    registered_at: info.registered_at,
+    last_active_at: info.last_active_at,
+  };
 }
 
 // ============================================================================
@@ -122,46 +164,68 @@ export async function getInbox(
   agentName: string,
   options: InboxOptions = {},
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Message[]> {
-  const db = await getDatabase(projectPath);
+  // If db provided (for testing), use it directly
+  if (db) {
+    const database = db;
 
-  const {
-    limit = 50,
-    urgentOnly = false,
-    unreadOnly = false,
-    includeBodies = true,
-  } = options;
+    const {
+      limit = 50,
+      urgentOnly = false,
+      unreadOnly = false,
+      includeBodies = true,
+    } = options;
 
-  // Build query with conditions
-  const conditions = ["m.project_key = $1", "mr.agent_name = $2"];
-  const params: (string | number)[] = [projectKey, agentName];
-  let paramIndex = 3;
+    // Build query with conditions
+    const conditions = ["m.project_key = $1", "mr.agent_name = $2"];
+    const params: (string | number)[] = [projectKey, agentName];
+    let paramIndex = 3;
 
-  if (urgentOnly) {
-    conditions.push(`m.importance = 'urgent'`);
+    if (urgentOnly) {
+      conditions.push(`m.importance = 'urgent'`);
+    }
+
+    if (unreadOnly) {
+      conditions.push(`mr.read_at IS NULL`);
+    }
+
+    const bodySelect = includeBodies ? ", m.body" : "";
+
+    const query = `
+      SELECT m.id, m.from_agent, m.subject${bodySelect}, m.thread_id, 
+             m.importance, m.ack_required, m.created_at,
+             mr.read_at, mr.acked_at
+      FROM messages m
+      JOIN message_recipients mr ON m.id = mr.message_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY m.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit);
+
+    const result = await database.query<Message>(query, params);
+
+    return result.rows;
   }
 
-  if (unreadOnly) {
-    conditions.push(`mr.read_at IS NULL`);
-  }
-
-  const bodySelect = includeBodies ? ", m.body" : "";
-
-  const query = `
-    SELECT m.id, m.from_agent, m.subject${bodySelect}, m.thread_id, 
-           m.importance, m.ack_required, m.created_at,
-           mr.read_at, mr.acked_at
-    FROM messages m
-    JOIN message_recipients mr ON m.id = mr.message_id
-    WHERE ${conditions.join(" AND ")}
-    ORDER BY m.created_at DESC
-    LIMIT $${paramIndex}
-  `;
-  params.push(limit);
-
-  const result = await db.query<Message>(query, params);
-
-  return result.rows;
+  // Zero-config: use cached adapter
+  const adapter = await getOrCreateAdapter(projectPath ?? process.cwd());
+  const messages = await adapter.getInbox(projectKey, agentName, options);
+  
+  // Map SwarmMessage to Message (they have compatible shapes)
+  return messages.map((msg) => ({
+    id: msg.id,
+    from_agent: msg.from_agent,
+    subject: msg.subject,
+    body: msg.body,
+    thread_id: msg.thread_id ?? null,
+    importance: msg.importance,
+    ack_required: msg.ack_required,
+    created_at: msg.created_at,
+    read_at: undefined, // Not included in SwarmMessage
+    acked_at: undefined, // Not included in SwarmMessage
+  }));
 }
 
 /**
@@ -171,10 +235,11 @@ export async function getMessage(
   projectKey: string,
   messageId: number,
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Message | null> {
-  const db = await getDatabase(projectPath);
+  const database = db ?? new PGliteDatabaseAdapter(await getDatabase(projectPath));
 
-  const result = await db.query<Message>(
+  const result = await database.query<Message>(
     `SELECT id, from_agent, subject, body, thread_id, importance, ack_required, created_at
      FROM messages
      WHERE project_key = $1 AND id = $2`,
@@ -191,10 +256,11 @@ export async function getThreadMessages(
   projectKey: string,
   threadId: string,
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Message[]> {
-  const db = await getDatabase(projectPath);
+  const database = db ?? new PGliteDatabaseAdapter(await getDatabase(projectPath));
 
-  const result = await db.query<Message>(
+  const result = await database.query<Message>(
     `SELECT id, from_agent, subject, body, thread_id, importance, ack_required, created_at
      FROM messages
      WHERE project_key = $1 AND thread_id = $2
@@ -216,8 +282,9 @@ export async function getActiveReservations(
   projectKey: string,
   projectPath?: string,
   agentName?: string,
+  db?: DatabaseAdapter,
 ): Promise<Reservation[]> {
-  const db = await getDatabase(projectPath);
+  const database = db ?? new PGliteDatabaseAdapter(await getDatabase(projectPath));
 
   const now = Date.now();
   const baseQuery = `
@@ -237,7 +304,7 @@ export async function getActiveReservations(
 
   query += ` ORDER BY created_at ASC`;
 
-  const result = await db.query<Reservation>(query, params);
+  const result = await database.query<Reservation>(query, params);
 
   return result.rows;
 }
@@ -255,9 +322,10 @@ export async function checkConflicts(
   agentName: string,
   paths: string[],
   projectPath?: string,
+  db?: DatabaseAdapter,
 ): Promise<Conflict[]> {
   // Get all active exclusive reservations from OTHER agents
-  const reservations = await getActiveReservations(projectKey, projectPath);
+  const reservations = await getActiveReservations(projectKey, projectPath, undefined, db);
 
   const conflicts: Conflict[] = [];
 

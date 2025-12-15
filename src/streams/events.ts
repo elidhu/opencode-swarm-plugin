@@ -142,6 +142,36 @@ export const TaskBlockedEventSchema = BaseEventSchema.extend({
 });
 
 // ============================================================================
+// Checkpoint Events
+// ============================================================================
+
+export const CheckpointCreatedEventSchema = BaseEventSchema.extend({
+  type: z.literal("checkpoint_created"),
+  agent_name: z.string(),
+  epic_id: z.string(),
+  bead_id: z.string(),
+  /** Full checkpoint context (stored as JSONB) */
+  context: z.record(z.string(), z.unknown()),
+  /** Progress percentage at checkpoint time */
+  progress_percent: z.number().min(0).max(100),
+  /** Milestone reached */
+  milestone: z.string().optional(),
+});
+
+export const CheckpointRecoveredEventSchema = BaseEventSchema.extend({
+  type: z.literal("checkpoint_recovered"),
+  agent_name: z.string(),
+  epic_id: z.string(),
+  bead_id: z.string(),
+  /** Recovered from checkpoint at this timestamp */
+  checkpoint_timestamp: z.number(),
+  /** Whether recovery was successful */
+  success: z.boolean(),
+  /** Recovery notes or error message */
+  notes: z.string().optional(),
+});
+
+// ============================================================================
 // Union Type
 // ============================================================================
 
@@ -157,6 +187,8 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   TaskProgressEventSchema,
   TaskCompletedEventSchema,
   TaskBlockedEventSchema,
+  CheckpointCreatedEventSchema,
+  CheckpointRecoveredEventSchema,
 ]);
 
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
@@ -173,6 +205,8 @@ export type TaskStartedEvent = z.infer<typeof TaskStartedEventSchema>;
 export type TaskProgressEvent = z.infer<typeof TaskProgressEventSchema>;
 export type TaskCompletedEvent = z.infer<typeof TaskCompletedEventSchema>;
 export type TaskBlockedEvent = z.infer<typeof TaskBlockedEventSchema>;
+export type CheckpointCreatedEvent = z.infer<typeof CheckpointCreatedEventSchema>;
+export type CheckpointRecoveredEvent = z.infer<typeof CheckpointRecoveredEventSchema>;
 
 // ============================================================================
 // Session State Types

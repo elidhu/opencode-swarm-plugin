@@ -1,8 +1,8 @@
 /**
  * Integration tests for hive-mail.ts (embedded implementation)
  *
- * These tests run against the embedded PGLite database.
- * No external server required - everything runs in-process.
+ * These tests run against the embedded PGLite database with option
+ * for in-memory adapters for fast, isolated testing.
  *
  * Run with: pnpm test:integration
  */
@@ -21,6 +21,8 @@ import {
   hivemail_health,
   clearSessionState,
 } from "./hive-mail";
+import { createInMemorySwarmMail } from "./streams/test-utils";
+import type { SwarmMailAdapter } from "./types/adapter";
 
 // ============================================================================
 // Test Configuration
@@ -40,6 +42,13 @@ function trackPath(path: string): string {
 }
 
 let TEST_DB_PATH: string;
+
+/** Optional in-memory adapter for faster testing */
+let inMemoryAdapter: SwarmMailAdapter | null = null;
+let inMemoryCleanup: (() => Promise<void>) | null = null;
+
+/** Flag to enable in-memory testing (TODO: Enable after bead .2 completes) */
+const USE_IN_MEMORY = false; // Set to true once bead .2 adds adapter support to store/projections
 
 /**
  * Generate a unique test context to avoid state collisions between tests
@@ -62,8 +71,8 @@ interface MockToolContext {
  * Helper to execute tool and parse JSON response
  */
 async function executeTool<T>(
-  tool: { execute: (args: unknown, ctx: unknown) => Promise<string> },
-  args: unknown,
+  tool: { execute: (args: any, ctx: any) => Promise<string> },
+  args: any,
   ctx: MockToolContext,
 ): Promise<T> {
   const result = await tool.execute(args, ctx);
@@ -77,29 +86,45 @@ async function executeTool<T>(
 beforeEach(async () => {
   testPaths = [];
   TEST_DB_PATH = trackPath(testDbPath());
-  await resetDatabase(TEST_DB_PATH);
+  
+  if (USE_IN_MEMORY) {
+    // Use in-memory adapter for faster testing
+    const result = await createInMemorySwarmMail();
+    inMemoryAdapter = result.adapter;
+    inMemoryCleanup = result.cleanup;
+  } else {
+    // Use PGLite (current behavior)
+    await resetDatabase(TEST_DB_PATH);
+  }
 });
 
 afterEach(async () => {
-  // Clean up all test databases
-  for (const path of testPaths) {
-    try {
-      // Wipe all data before closing
-      const db = await getDatabase(path);
-      await db.exec(`
-        DELETE FROM message_recipients;
-        DELETE FROM messages;
-        DELETE FROM reservations;
-        DELETE FROM agents;
-        DELETE FROM events;
-        DELETE FROM locks;
-        DELETE FROM cursors;
-        DELETE FROM deferred;
-      `);
-    } catch {
-      // Ignore errors during cleanup
+  if (USE_IN_MEMORY && inMemoryCleanup) {
+    // Clean up in-memory adapter
+    await inMemoryCleanup();
+    inMemoryAdapter = null;
+    inMemoryCleanup = null;
+  } else {
+    // Clean up all test databases (PGLite)
+    for (const path of testPaths) {
+      try {
+        // Wipe all data before closing
+        const db = await getDatabase(path);
+        await db.exec(`
+          DELETE FROM message_recipients;
+          DELETE FROM messages;
+          DELETE FROM reservations;
+          DELETE FROM agents;
+          DELETE FROM events;
+          DELETE FROM locks;
+          DELETE FROM cursors;
+          DELETE FROM deferred;
+        `);
+      } catch {
+        // Ignore errors during cleanup
+      }
+      await closeDatabase(path);
     }
-    await closeDatabase(path);
   }
   testPaths = [];
 });
