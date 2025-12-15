@@ -14,7 +14,7 @@ describe("embeddings", () => {
 
   describe("EMBEDDING_DIMENSION", () => {
     it("exports the correct dimension", () => {
-      expect(EMBEDDING_DIMENSION).toBe(768);
+      expect(EMBEDDING_DIMENSION).toBe(384);
     });
   });
 

@@ -260,6 +260,32 @@ hivemail_read_message(message_id=N)  # Read specific message
 - Worker asking questions → Answer directly
 - Scope creep → Redirect, create new bead for extras
 
+**CRITICAL: Detecting Agent Failures**
+
+Task agents can crash without completing their beads. After spawning agents:
+
+1. **Check hive_status** - Look for beads still "in_progress" after tasks return
+2. **Check task results** - If Task tool returned an error or crash, the agent failed
+3. **Check hivemail_inbox** - Agents should send progress messages; silence = possible crash
+
+**If agent failure detected:**
+```bash
+# Mark bead as blocked
+beads_update(id="<bead-id>", status="blocked")
+
+# Option 1: Re-spawn the agent
+hive_spawn_subtask(...) 
+Task(subagent_type="hive-worker", prompt="...")
+
+# Option 2: Complete the work yourself
+# Read files, implement, then close bead
+
+# Option 3: Ask user for guidance
+"Agent for <bead-id> crashed. Options: retry, skip, or I implement?"
+```
+
+**Known Issue:** Bun may crash during cleanup with transformers.js (semantic memory). The work IS completed but Bun panics on exit. Check if bead was closed before assuming failure.
+
 If incompatibilities spotted, broadcast:
 
 ```bash

@@ -29,3 +29,11 @@ coverage/
 *.log
 npm-debug.log*
 .opencode/streams/
+
+# Hive working directory
+.hive/
+
+# Analysis/intermediary files (auto-generated)
+*_ANALYSIS.md
+*-analysis.md
+SEMANTIC_MEMORY_*.md

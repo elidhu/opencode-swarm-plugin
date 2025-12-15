@@ -1,15 +1,19 @@
 /**
- * Text Embeddings using Transformers.js
+ * Text Embeddings using Transformers.js via Node.js subprocess
  *
  * ## Overview
- * This module provides local text embeddings using the 'Xenova/all-mpnet-base-v2' model.
- * The model is downloaded once (~90MB) and cached locally for subsequent runs.
+ * This module provides local text embeddings using the 'Xenova/all-MiniLM-L6-v2' model.
+ * The model is downloaded once (~30MB) and cached locally for subsequent runs.
  *
  * ## Architecture
- * - **Singleton Pattern**: The embedder is initialized lazily on first use
- * - **Model**: all-mpnet-base-v2 (768-dimensional embeddings)
+ * - **Node.js Subprocess**: Embeddings run in Node.js to avoid Bun/ONNX crash
+ * - **Model**: all-MiniLM-L6-v2 (384-dimensional embeddings, faster than mpnet)
  * - **Pooling**: Mean pooling for sentence-level embeddings
  * - **Normalization**: Embeddings are normalized for cosine similarity
+ *
+ * ## Why Node.js?
+ * Bun crashes during ONNX runtime cleanup with @huggingface/transformers.
+ * Node.js handles it correctly. We spawn Node for embedding ops only.
  *
  * ## Usage
  * ```typescript
@@ -17,144 +21,117 @@
  *
  * // Single text
  * const vector = await embed("Hello world");
- * console.log(vector.length); // 768
+ * console.log(vector.length); // 384
  *
  * // Batch processing
  * const vectors = await embedBatch(["text1", "text2", "text3"]);
  * console.log(vectors.length); // 3
- * console.log(vectors[0].length); // 768
+ * console.log(vectors[0].length); // 384
  * ```
- *
- * ## Thread Safety
- * The module is safe for concurrent use. Multiple calls during initialization
- * will share the same pending Promise, preventing duplicate model loading.
  */
 
-import {
-  pipeline,
-  type FeatureExtractionPipeline,
-} from "@huggingface/transformers";
+import { spawn } from "node:child_process";
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/** Dimension of embeddings produced by all-mpnet-base-v2 model */
-export const EMBEDDING_DIMENSION = 768;
+/** Dimension of embeddings produced by all-MiniLM-L6-v2 model */
+export const EMBEDDING_DIMENSION = 384;
 
-/** Model name - high quality sentence transformer */
-const MODEL_NAME = "Xenova/all-mpnet-base-v2";
+/** Model name - fast, good quality sentence transformer */
+const MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
 
 // ============================================================================
-// Singleton Embedder Instance
+// Node.js Subprocess Execution
 // ============================================================================
 
-/** Cached embedder instance */
-let embedderInstance: FeatureExtractionPipeline | null = null;
-
-/** Pending initialization promise to prevent race conditions */
-let initPromise: Promise<FeatureExtractionPipeline> | null = null;
-
 /**
- * Get or create the embedder pipeline
+ * Run embedding generation in Node.js subprocess
  *
- * Uses Promise-based caching to prevent race conditions when multiple concurrent
- * calls occur before the first one completes.
- *
- * @returns Initialized feature extraction pipeline
+ * This avoids the Bun ONNX crash by isolating transformers.js in Node.
  */
-async function getEmbedder(): Promise<FeatureExtractionPipeline> {
-  // Return cached instance if available
-  if (embedderInstance) {
-    return embedderInstance;
-  }
+async function runNodeEmbedding(texts: string[]): Promise<number[][]> {
+  return new Promise((resolve, reject) => {
+    // Escape texts for JSON embedding in script
+    const textsJson = JSON.stringify(texts);
 
-  // Return pending promise if initialization is in progress
-  if (initPromise) {
-    return initPromise;
-  }
+    const script = `
+const { pipeline } = require('@huggingface/transformers');
 
-  // Create new initialization promise
-  initPromise = initializeEmbedder();
-
+(async () => {
   try {
-    embedderInstance = await initPromise;
-    return embedderInstance;
-  } finally {
-    // Clean up pending promise once resolved/rejected
-    initPromise = null;
-  }
-}
-
-/**
- * Initialize the embedder pipeline
- *
- * Downloads the model on first run (~90MB, cached locally).
- * Subsequent runs load from cache.
- */
-async function initializeEmbedder(): Promise<FeatureExtractionPipeline> {
-  try {
-    console.log("[embeddings] Initializing embedder model...");
-    const embedder = (await pipeline(
-      "feature-extraction",
-      MODEL_NAME,
-    )) as FeatureExtractionPipeline;
-    console.log("[embeddings] Embedder initialized successfully");
-    return embedder;
-  } catch (error) {
-    const err = error as Error;
-    console.error(
-      `[embeddings] Failed to initialize embedder: ${err.message}`,
-    );
-    throw new Error(`Embedder initialization failed: ${err.message}`);
-  }
-}
-
-/**
- * Apply mean pooling to token embeddings
- *
- * Takes the raw token-level embeddings and pools them to get a single
- * sentence-level embedding.
- */
-function meanPooling(tokenEmbeddings: number[][], sequenceLength: number): number[] {
-  const embeddingDim = tokenEmbeddings[0]?.length ?? EMBEDDING_DIMENSION;
-  const pooled = new Array(embeddingDim).fill(0);
-
-  // Sum all token embeddings
-  for (let i = 0; i < sequenceLength; i++) {
-    const tokenEmb = tokenEmbeddings[i];
-    if (tokenEmb) {
-      for (let j = 0; j < embeddingDim; j++) {
-        pooled[j] += tokenEmb[j];
-      }
+    const texts = ${textsJson};
+    
+    // Explicitly set dtype to suppress warning
+    const embedder = await pipeline('feature-extraction', '${MODEL_NAME}', {
+      dtype: 'fp32'
+    });
+    
+    const results = [];
+    for (const text of texts) {
+      const result = await embedder(text, { pooling: 'mean', normalize: true });
+      // Extract the embedding array from tensor
+      const data = Array.from(result.data);
+      results.push(data.slice(0, ${EMBEDDING_DIMENSION}));
     }
+    
+    console.log(JSON.stringify({ success: true, embeddings: results }));
+  } catch (error) {
+    console.log(JSON.stringify({ success: false, error: error.message }));
   }
+})();
+`;
 
-  // Average by number of tokens
-  for (let j = 0; j < embeddingDim; j++) {
-    pooled[j] /= sequenceLength;
-  }
+    const node = spawn("node", ["-e", script], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
 
-  return pooled;
-}
+    let stdout = "";
+    let stderr = "";
 
-/**
- * Normalize a vector to unit length (L2 normalization)
- */
-function normalize(vector: number[]): number[] {
-  // Calculate L2 norm
-  let norm = 0;
-  for (const val of vector) {
-    norm += val * val;
-  }
-  norm = Math.sqrt(norm);
+    node.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
 
-  // Normalize
-  if (norm === 0) {
-    return vector; // Avoid division by zero
-  }
+    node.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
 
-  return vector.map((val) => val / norm);
+    node.on("close", () => {
+      // Find the JSON output line (last line with valid JSON)
+      const lines = stdout.trim().split("\n");
+      let result = null;
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          result = JSON.parse(lines[i]);
+          break;
+        } catch {
+          // Not JSON, keep looking
+        }
+      }
+
+      if (!result) {
+        reject(
+          new Error(
+            `Failed to parse embedding result. stdout: ${stdout}, stderr: ${stderr}`,
+          ),
+        );
+        return;
+      }
+
+      if (result.success) {
+        resolve(result.embeddings);
+      } else {
+        reject(new Error(result.error || "Unknown embedding error"));
+      }
+    });
+
+    node.on("error", (err) => {
+      reject(new Error(`Failed to spawn node process: ${err.message}`));
+    });
+  });
 }
 
 // ============================================================================
@@ -164,154 +141,41 @@ function normalize(vector: number[]): number[] {
 /**
  * Generate embedding for a single text
  *
- * The embedding is a 768-dimensional vector normalized for cosine similarity.
+ * The embedding is a 384-dimensional vector normalized for cosine similarity.
  *
  * @param text - Text to embed
- * @returns 768-dimensional embedding vector
+ * @returns 384-dimensional embedding vector
  *
  * @example
  * const vector = await embed("Hello world");
- * console.log(vector.length); // 768
+ * console.log(vector.length); // 384
  */
 export async function embed(text: string): Promise<number[]> {
-  const embedder = await getEmbedder();
-
-  try {
-    // Generate embeddings with pooling and normalization
-    const result = await embedder(text, { pooling: "mean", normalize: true });
-
-    // The result is a Tensor with dims [1, embedding_dim] for single text
-    // We need to extract the data and handle the shape
-    const dims = result.dims as number[];
-    const data = Array.from(result.data) as number[];
-
-    // For pooled result, dims should be [1, EMBEDDING_DIMENSION]
-    // The data is flat, so we just need to slice the relevant portion
-    let embedding: number[];
-    
-    if (dims.length === 2 && dims[1] === EMBEDDING_DIMENSION) {
-      // Perfect - already pooled and correct dimension
-      embedding = data.slice(0, EMBEDDING_DIMENSION);
-    } else if (dims.length === 3) {
-      // Token-level embeddings: [batch, sequence_length, embedding_dim]
-      // We need to apply mean pooling manually
-      const [batch, seqLen, embDim] = dims;
-      if (embDim !== EMBEDDING_DIMENSION) {
-        throw new Error(
-          `Model embedding dimension ${embDim} does not match expected ${EMBEDDING_DIMENSION}`,
-        );
-      }
-      
-      // Extract first batch, apply mean pooling
-      const pooled = new Array(embDim).fill(0);
-      for (let i = 0; i < seqLen; i++) {
-        for (let j = 0; j < embDim; j++) {
-          pooled[j] += data[i * embDim + j];
-        }
-      }
-      for (let j = 0; j < embDim; j++) {
-        pooled[j] /= seqLen;
-      }
-      
-      // Normalize
-      embedding = normalize(pooled);
-    } else {
-      throw new Error(
-        `Unexpected tensor shape: dims=${dims.join(",")}, data.length=${data.length}`,
-      );
-    }
-
-    return embedding;
-  } catch (error) {
-    const err = error as Error;
-    console.error(`[embeddings] Failed to embed text: ${err.message}`);
-    throw new Error(`Embedding generation failed: ${err.message}`);
-  }
+  const results = await runNodeEmbedding([text]);
+  return results[0];
 }
 
 /**
  * Generate embeddings for multiple texts in batch
  *
- * More efficient than calling embed() multiple times for large batches.
- *
  * @param texts - Array of texts to embed
- * @returns Array of 768-dimensional embedding vectors
+ * @returns Array of 384-dimensional embedding vectors
  *
  * @example
  * const vectors = await embedBatch(["text1", "text2", "text3"]);
  * console.log(vectors.length); // 3
- * console.log(vectors[0].length); // 768
+ * console.log(vectors[0].length); // 384
  */
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) {
     return [];
   }
-
-  const embedder = await getEmbedder();
-
-  try {
-    // Process in batch with pooling and normalization
-    const result = await embedder(texts, { pooling: "mean", normalize: true });
-
-    // The result is a Tensor with dims [batch_size, embedding_dim] for pooled result
-    const dims = result.dims as number[];
-    const data = Array.from(result.data) as number[];
-
-    const embeddings: number[][] = [];
-
-    if (dims.length === 2 && dims[0] === texts.length && dims[1] === EMBEDDING_DIMENSION) {
-      // Perfect - already pooled, just reshape
-      for (let i = 0; i < texts.length; i++) {
-        const start = i * EMBEDDING_DIMENSION;
-        const end = start + EMBEDDING_DIMENSION;
-        embeddings.push(data.slice(start, end));
-      }
-    } else if (dims.length === 3) {
-      // Token-level embeddings: [batch_size, sequence_length, embedding_dim]
-      // Need to pool each batch separately
-      const [batchSize, seqLen, embDim] = dims;
-      
-      if (embDim !== EMBEDDING_DIMENSION) {
-        throw new Error(
-          `Model embedding dimension ${embDim} does not match expected ${EMBEDDING_DIMENSION}`,
-        );
-      }
-
-      for (let b = 0; b < batchSize; b++) {
-        const pooled = new Array(embDim).fill(0);
-        const batchOffset = b * seqLen * embDim;
-        
-        for (let i = 0; i < seqLen; i++) {
-          for (let j = 0; j < embDim; j++) {
-            pooled[j] += data[batchOffset + i * embDim + j];
-          }
-        }
-        
-        for (let j = 0; j < embDim; j++) {
-          pooled[j] /= seqLen;
-        }
-        
-        // Normalize
-        embeddings.push(normalize(pooled));
-      }
-    } else {
-      throw new Error(
-        `Unexpected tensor shape: dims=${dims.join(",")}, data.length=${data.length}`,
-      );
-    }
-
-    return embeddings;
-  } catch (error) {
-    const err = error as Error;
-    console.error(`[embeddings] Failed to embed batch: ${err.message}`);
-    throw new Error(`Batch embedding generation failed: ${err.message}`);
-  }
+  return runNodeEmbedding(texts);
 }
 
 /**
- * Reset the embedder instance (useful for testing)
+ * Reset the embedder instance (no-op for subprocess implementation)
  */
 export function resetEmbedder(): void {
-  embedderInstance = null;
-  initPromise = null;
+  // No persistent state to reset in subprocess model
 }
