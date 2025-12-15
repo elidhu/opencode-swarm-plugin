@@ -449,7 +449,8 @@ export class LanceDBStorage implements LearningStorage {
     if (!table) return [];
 
     try {
-      const results = await table.query().toArray();
+      // Note: LanceDB query() has a default limit of 10, so we need to explicitly set a higher limit
+      const results = await table.query().limit(10000).toArray();
 
       return results.map((r: any) => ({
         id: r.id,
