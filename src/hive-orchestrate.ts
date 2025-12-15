@@ -47,8 +47,8 @@ import {
   type FeedbackEvent,
   getArchitecturePrompt,
   getStrikes,
-  InMemoryStrikeStorage,
   isStrikedOut,
+  LearningStrikeStorageAdapter,
   type OutcomeSignals,
   OutcomeSignalsSchema,
   outcomeToFeedback,
@@ -433,7 +433,7 @@ const globalErrorAccumulator = new ErrorAccumulator();
 /**
  * Global strike storage for tracking consecutive fix failures
  */
-const globalStrikeStorage: StrikeStorage = new InMemoryStrikeStorage();
+const globalStrikeStorage: StrikeStorage = new LearningStrikeStorageAdapter(getStorage());
 
 // ============================================================================
 // Tool Definitions

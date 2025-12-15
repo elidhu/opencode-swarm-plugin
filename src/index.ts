@@ -193,7 +193,6 @@ export {
   resetMandateStorage,
   updateMandateStatus,
   updateAllMandateStatuses,
-  InMemoryMandateStorage,
   SemanticMemoryMandateStorage,
   DEFAULT_MANDATE_STORAGE_CONFIG,
   type MandateStorage,

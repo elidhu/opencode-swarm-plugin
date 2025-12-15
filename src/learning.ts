@@ -539,35 +539,6 @@ export interface StrikeStorage {
   clear(beadId: string): Promise<void>;
 }
 
-/**
- * In-memory strike storage
- */
-export class InMemoryStrikeStorage implements StrikeStorage {
-  private strikes: Map<string, StrikeRecord> = new Map();
-
-  async store(record: StrikeRecord): Promise<void> {
-    this.strikes.set(record.bead_id, record);
-  }
-
-  async get(beadId: string): Promise<StrikeRecord | null> {
-    const record = this.strikes.get(beadId);
-    if (!record) return null;
-    // Return a deep copy to prevent mutation of stored data
-    return {
-      ...record,
-      failures: [...record.failures],
-    };
-  }
-
-  async getAll(): Promise<StrikeRecord[]> {
-    return Array.from(this.strikes.values());
-  }
-
-  async clear(beadId: string): Promise<void> {
-    this.strikes.delete(beadId);
-  }
-}
-
 
 
 /**
@@ -719,37 +690,7 @@ export interface ErrorStorage {
   getAll(): Promise<ErrorEntry[]>;
 }
 
-/**
- * In-memory error storage
- *
- * Accumulates errors during subtask execution for feeding into retry prompts.
- */
-export class InMemoryErrorStorage implements ErrorStorage {
-  private errors: ErrorEntry[] = [];
 
-  async store(entry: ErrorEntry): Promise<void> {
-    this.errors.push(entry);
-  }
-
-  async getByBead(beadId: string): Promise<ErrorEntry[]> {
-    return this.errors.filter((e) => e.bead_id === beadId);
-  }
-
-  async getUnresolvedByBead(beadId: string): Promise<ErrorEntry[]> {
-    return this.errors.filter((e) => e.bead_id === beadId && !e.resolved);
-  }
-
-  async markResolved(id: string): Promise<void> {
-    const error = this.errors.find((e) => e.id === id);
-    if (error) {
-      error.resolved = true;
-    }
-  }
-
-  async getAll(): Promise<ErrorEntry[]> {
-    return [...this.errors];
-  }
-}
 
 // ============================================================================
 // LearningStorage Adapters

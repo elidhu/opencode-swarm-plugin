@@ -941,7 +941,6 @@ describe("Storage Module", () => {
 // ============================================================================
 
 import {
-  InMemoryStrikeStorage,
   addStrike,
   getStrikes,
   isStrikedOut,
@@ -952,9 +951,24 @@ import {
 
 describe("3-Strike Detection", () => {
   let storage: StrikeStorage;
+  let testDir: string;
+  let lanceStorage: LanceDBStorage;
 
   beforeEach(() => {
-    storage = new InMemoryStrikeStorage();
+    // Create test storage using LanceDB
+    testDir = join(tmpdir(), `strike-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(testDir, { recursive: true });
+    lanceStorage = new LanceDBStorage({ vectorDir: testDir });
+    storage = new LearningStrikeStorageAdapter(lanceStorage);
+  });
+
+  afterEach(async () => {
+    await lanceStorage.close();
+    // Give file handles time to release
+    await new Promise((r) => setTimeout(r, 50));
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 
   describe("addStrike", () => {
@@ -1168,44 +1182,6 @@ describe("3-Strike Detection", () => {
 
     it("handles clearing non-existent bead gracefully", async () => {
       await expect(clearStrikes("no-bead", storage)).resolves.toBeUndefined();
-    });
-  });
-
-  describe("InMemoryStrikeStorage", () => {
-    it("stores and retrieves strike records", async () => {
-      const storage = new InMemoryStrikeStorage();
-      const record = await addStrike("bead-1", "Fix", "Failed", storage);
-
-      const retrieved = await storage.get("bead-1");
-      expect(retrieved).not.toBeNull();
-      expect(retrieved!.bead_id).toBe("bead-1");
-      expect(retrieved!.strike_count).toBe(1);
-    });
-
-    it("returns null for non-existent bead", async () => {
-      const storage = new InMemoryStrikeStorage();
-      const retrieved = await storage.get("non-existent");
-      expect(retrieved).toBeNull();
-    });
-
-    it("lists all strike records", async () => {
-      const storage = new InMemoryStrikeStorage();
-      await addStrike("bead-1", "Fix", "Failed", storage);
-      await addStrike("bead-2", "Fix", "Failed", storage);
-
-      const all = await storage.getAll();
-      expect(all).toHaveLength(2);
-    });
-
-    it("clears specific bead strikes", async () => {
-      const storage = new InMemoryStrikeStorage();
-      await addStrike("bead-1", "Fix", "Failed", storage);
-      await addStrike("bead-2", "Fix", "Failed", storage);
-
-      await storage.clear("bead-1");
-
-      expect(await storage.get("bead-1")).toBeNull();
-      expect(await storage.get("bead-2")).not.toBeNull();
     });
   });
 

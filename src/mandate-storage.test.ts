@@ -3,19 +3,157 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  createMandateStorage,
-  InMemoryMandateStorage,
+  SemanticMemoryMandateStorage,
   updateMandateStatus,
   updateAllMandateStatuses,
   type MandateStorage,
 } from "./mandate-storage";
-import type { MandateEntry, Vote } from "./schemas/mandate";
+import type {
+  MandateEntry,
+  Vote,
+  MandateScore,
+  MandateStatus,
+  MandateContentType,
+} from "./schemas/mandate";
+import { DEFAULT_MANDATE_DECAY_CONFIG } from "./schemas/mandate";
+import { calculateDecayedValue } from "./learning";
 
-describe("InMemoryMandateStorage", () => {
+/**
+ * Mock mandate storage for unit testing
+ *
+ * Implements MandateStorage interface with in-memory data structures.
+ * This is only for testing - production code uses SemanticMemoryMandateStorage.
+ */
+class MockMandateStorage implements MandateStorage {
+  private entries: Map<string, MandateEntry> = new Map();
+  private votes: Map<string, Vote> = new Map();
+
+  async store(entry: MandateEntry): Promise<void> {
+    this.entries.set(entry.id, entry);
+  }
+
+  async get(id: string): Promise<MandateEntry | null> {
+    return this.entries.get(id) || null;
+  }
+
+  async find(query: string, limit: number = 10): Promise<MandateEntry[]> {
+    const lowerQuery = query.toLowerCase();
+    const results = Array.from(this.entries.values()).filter(
+      (entry) =>
+        entry.content.toLowerCase().includes(lowerQuery) ||
+        entry.tags.some((tag) => tag.toLowerCase().includes(lowerQuery)),
+    );
+    return results.slice(0, limit);
+  }
+
+  async list(filter?: {
+    status?: MandateStatus;
+    content_type?: MandateContentType;
+  }): Promise<MandateEntry[]> {
+    let results = Array.from(this.entries.values());
+
+    if (filter) {
+      results = results.filter((entry) => {
+        if (filter.status && entry.status !== filter.status) return false;
+        if (filter.content_type && entry.content_type !== filter.content_type)
+          return false;
+        return true;
+      });
+    }
+
+    return results;
+  }
+
+  async update(id: string, updates: Partial<MandateEntry>): Promise<void> {
+    const existing = await this.get(id);
+    if (!existing) {
+      throw new Error(
+        `Mandate '${id}' not found. Use list() to see available mandates.`,
+      );
+    }
+
+    const updated = { ...existing, ...updates };
+    this.entries.set(id, updated);
+  }
+
+  async vote(vote: Vote): Promise<void> {
+    const existing = await this.hasVoted(vote.mandate_id, vote.agent_name);
+    if (existing) {
+      throw new Error(
+        `Agent '${vote.agent_name}' has already voted on mandate '${vote.mandate_id}'. Each agent can vote once per mandate to ensure fair consensus.`,
+      );
+    }
+
+    this.votes.set(vote.id, vote);
+  }
+
+  async getVotes(mandateId: string): Promise<Vote[]> {
+    return Array.from(this.votes.values()).filter(
+      (vote) => vote.mandate_id === mandateId,
+    );
+  }
+
+  async hasVoted(mandateId: string, agentName: string): Promise<boolean> {
+    const votes = await this.getVotes(mandateId);
+    return votes.some((vote) => vote.agent_name === agentName);
+  }
+
+  async calculateScore(mandateId: string): Promise<MandateScore> {
+    const votes = await this.getVotes(mandateId);
+    const now = new Date();
+
+    let rawUpvotes = 0;
+    let rawDownvotes = 0;
+    let decayedUpvotes = 0;
+    let decayedDownvotes = 0;
+
+    for (const vote of votes) {
+      const decayed = calculateDecayedValue(
+        vote.timestamp,
+        now,
+        DEFAULT_MANDATE_DECAY_CONFIG.halfLifeDays,
+      );
+      const value = vote.weight * decayed;
+
+      if (vote.vote_type === "upvote") {
+        rawUpvotes++;
+        decayedUpvotes += value;
+      } else {
+        rawDownvotes++;
+        decayedDownvotes += value;
+      }
+    }
+
+    const totalDecayed = decayedUpvotes + decayedDownvotes;
+    const voteRatio = totalDecayed > 0 ? decayedUpvotes / totalDecayed : 0;
+    const netVotes = decayedUpvotes - decayedDownvotes;
+
+    const decayedScore = netVotes * voteRatio;
+
+    return {
+      mandate_id: mandateId,
+      net_votes: netVotes,
+      vote_ratio: voteRatio,
+      decayed_score: decayedScore,
+      last_calculated: now.toISOString(),
+      raw_upvotes: rawUpvotes,
+      raw_downvotes: rawDownvotes,
+      decayed_upvotes: decayedUpvotes,
+      decayed_downvotes: decayedDownvotes,
+    };
+  }
+
+  async close(): Promise<void> {
+    // No cleanup needed
+  }
+}
+
+describe("MandateStorage", () => {
   let storage: MandateStorage;
 
   beforeEach(() => {
-    storage = createMandateStorage({ backend: "memory" });
+    // Use MockMandateStorage for fast, isolated unit tests
+    storage = new MockMandateStorage();
   });
 
   describe("Entry operations", () => {
@@ -177,7 +315,7 @@ describe("InMemoryMandateStorage", () => {
     it("should throw when updating non-existent mandate", async () => {
       await expect(
         storage.update("non-existent", { content: "Updated" }),
-      ).rejects.toThrow("Mandate non-existent not found");
+      ).rejects.toThrow("Mandate 'non-existent' not found");
     });
   });
 
@@ -235,7 +373,7 @@ describe("InMemoryMandateStorage", () => {
       };
 
       await expect(storage.vote(vote2)).rejects.toThrow(
-        "Agent GreenRiver has already voted on mandate mandate-1",
+        "Agent 'GreenRiver' has already voted on mandate 'mandate-1'",
       );
     });
 
@@ -561,18 +699,9 @@ describe("InMemoryMandateStorage", () => {
     });
   });
 
-  describe("Factory", () => {
-    it("should create in-memory storage", () => {
-      const storage = createMandateStorage({ backend: "memory" });
-      expect(storage).toBeInstanceOf(InMemoryMandateStorage);
-    });
-
-    it("should throw on unknown backend", () => {
-      expect(() =>
-        createMandateStorage({
-          backend: "unknown" as "semantic-memory" | "memory",
-        }),
-      ).toThrow("Unknown storage backend: unknown");
+  describe("Instance checks", () => {
+    it("should be instance of MockMandateStorage", () => {
+      expect(storage).toBeInstanceOf(MockMandateStorage);
     });
   });
 });

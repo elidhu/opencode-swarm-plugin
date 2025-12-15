@@ -1,9 +1,8 @@
 /**
  * Mandate Storage Module - Persistent storage for agent voting system
  *
- * Provides unified storage interface for mandate entries and votes:
- * - semantic-memory (default) - Persistent with semantic search
- * - in-memory - For testing and ephemeral sessions
+ * Provides unified storage interface for mandate entries and votes using LanceDB
+ * via semantic-memory for persistent storage with semantic search.
  *
  * Collections:
  * - `hive-mandates` - Mandate entry storage
@@ -15,9 +14,6 @@
  * ```typescript
  * // Use default semantic-memory storage
  * const storage = createMandateStorage();
- *
- * // Or in-memory for testing
- * const storage = createMandateStorage({ backend: "memory" });
  *
  * // Store a mandate
  * await storage.store({
@@ -136,9 +132,9 @@ export function resetCommandCache(): void {
 // ============================================================================
 
 /**
- * Storage backend type
+ * Storage backend type (only semantic-memory is supported)
  */
-export type MandateStorageBackend = "semantic-memory" | "memory";
+export type MandateStorageBackend = "semantic-memory";
 
 /**
  * Collection names for semantic-memory
@@ -483,151 +479,6 @@ export class SemanticMemoryMandateStorage implements MandateStorage {
 }
 
 // ============================================================================
-// In-Memory Storage Implementation
-// ============================================================================
-
-/**
- * In-memory mandate storage
- *
- * Useful for testing and ephemeral sessions.
- */
-export class InMemoryMandateStorage implements MandateStorage {
-  private entries: Map<string, MandateEntry> = new Map();
-  private votes: Map<string, Vote> = new Map();
-  private config: MandateDecayConfig;
-
-  constructor(config: Partial<MandateStorageConfig> = {}) {
-    const fullConfig = { ...DEFAULT_MANDATE_STORAGE_CONFIG, ...config };
-    this.config = fullConfig.decay;
-  }
-
-  // Entry operations
-  async store(entry: MandateEntry): Promise<void> {
-    this.entries.set(entry.id, entry);
-  }
-
-  async get(id: string): Promise<MandateEntry | null> {
-    return this.entries.get(id) || null;
-  }
-
-  async find(query: string, limit: number = 10): Promise<MandateEntry[]> {
-    // Simple text search for in-memory (no semantic search)
-    const lowerQuery = query.toLowerCase();
-    const results = Array.from(this.entries.values()).filter(
-      (entry) =>
-        entry.content.toLowerCase().includes(lowerQuery) ||
-        entry.tags.some((tag) => tag.toLowerCase().includes(lowerQuery)),
-    );
-    return results.slice(0, limit);
-  }
-
-  async list(filter?: {
-    status?: MandateStatus;
-    content_type?: MandateContentType;
-  }): Promise<MandateEntry[]> {
-    let results = Array.from(this.entries.values());
-
-    if (filter) {
-      results = results.filter((entry) => {
-        if (filter.status && entry.status !== filter.status) return false;
-        if (filter.content_type && entry.content_type !== filter.content_type)
-          return false;
-        return true;
-      });
-    }
-
-    return results;
-  }
-
-  async update(id: string, updates: Partial<MandateEntry>): Promise<void> {
-    const existing = await this.get(id);
-    if (!existing) {
-      throw new Error(
-        `Mandate '${id}' not found. Use list() to see available mandates.`,
-      );
-    }
-
-    const updated = { ...existing, ...updates };
-    this.entries.set(id, updated);
-  }
-
-  // Vote operations
-  async vote(vote: Vote): Promise<void> {
-    // Check for duplicate votes
-    const existing = await this.hasVoted(vote.mandate_id, vote.agent_name);
-    if (existing) {
-      throw new Error(
-        `Agent '${vote.agent_name}' has already voted on mandate '${vote.mandate_id}'. Each agent can vote once per mandate to ensure fair consensus.`,
-      );
-    }
-
-    this.votes.set(vote.id, vote);
-  }
-
-  async getVotes(mandateId: string): Promise<Vote[]> {
-    return Array.from(this.votes.values()).filter(
-      (vote) => vote.mandate_id === mandateId,
-    );
-  }
-
-  async hasVoted(mandateId: string, agentName: string): Promise<boolean> {
-    const votes = await this.getVotes(mandateId);
-    return votes.some((vote) => vote.agent_name === agentName);
-  }
-
-  // Score calculation
-  async calculateScore(mandateId: string): Promise<MandateScore> {
-    const votes = await this.getVotes(mandateId);
-    const now = new Date();
-
-    let rawUpvotes = 0;
-    let rawDownvotes = 0;
-    let decayedUpvotes = 0;
-    let decayedDownvotes = 0;
-
-    for (const vote of votes) {
-      const decayed = calculateDecayedValue(
-        vote.timestamp,
-        now,
-        this.config.halfLifeDays,
-      );
-      const value = vote.weight * decayed;
-
-      if (vote.vote_type === "upvote") {
-        rawUpvotes++;
-        decayedUpvotes += value;
-      } else {
-        rawDownvotes++;
-        decayedDownvotes += value;
-      }
-    }
-
-    const totalDecayed = decayedUpvotes + decayedDownvotes;
-    const voteRatio = totalDecayed > 0 ? decayedUpvotes / totalDecayed : 0;
-    const netVotes = decayedUpvotes - decayedDownvotes;
-
-    // Score combines net votes with vote ratio
-    const decayedScore = netVotes * voteRatio;
-
-    return {
-      mandate_id: mandateId,
-      net_votes: netVotes,
-      vote_ratio: voteRatio,
-      decayed_score: decayedScore,
-      last_calculated: now.toISOString(),
-      raw_upvotes: rawUpvotes,
-      raw_downvotes: rawDownvotes,
-      decayed_upvotes: decayedUpvotes,
-      decayed_downvotes: decayedDownvotes,
-    };
-  }
-
-  async close(): Promise<void> {
-    // No cleanup needed
-  }
-}
-
-// ============================================================================
 // Factory
 // ============================================================================
 
@@ -641,9 +492,6 @@ export class InMemoryMandateStorage implements MandateStorage {
  * ```typescript
  * // Default semantic-memory storage
  * const storage = createMandateStorage();
- *
- * // In-memory for testing
- * const storage = createMandateStorage({ backend: "memory" });
  *
  * // Custom collections
  * const storage = createMandateStorage({
@@ -660,16 +508,13 @@ export function createMandateStorage(
 ): MandateStorage {
   const fullConfig = { ...DEFAULT_MANDATE_STORAGE_CONFIG, ...config };
 
-  switch (fullConfig.backend) {
-    case "semantic-memory":
-      return new SemanticMemoryMandateStorage(fullConfig);
-    case "memory":
-      return new InMemoryMandateStorage(fullConfig);
-    default:
-      throw new Error(
-        `Unknown storage backend: '${fullConfig.backend}'. Valid backends are 'semantic-memory' or 'memory'.`,
-      );
+  if (fullConfig.backend !== "semantic-memory") {
+    throw new Error(
+      `Invalid storage backend: '${fullConfig.backend}'. Only 'semantic-memory' is supported. LanceDB is now mandatory.`,
+    );
   }
+
+  return new SemanticMemoryMandateStorage(fullConfig);
 }
 
 // ============================================================================
