@@ -31,6 +31,11 @@
  */
 
 import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Get the directory where this module is located (for finding node_modules)
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ============================================================================
 // Constants
@@ -83,8 +88,17 @@ const { pipeline } = require('@huggingface/transformers');
 })();
 `;
 
+    // Set NODE_PATH to include the plugin's node_modules so @huggingface/transformers can be found
+    // This is necessary because the subprocess runs in the user's project directory
+    const pluginNodeModules = join(__dirname, "..", "node_modules");
+    const env = {
+      ...process.env,
+      NODE_PATH: pluginNodeModules,
+    };
+
     const node = spawn("node", ["-e", script], {
       stdio: ["pipe", "pipe", "pipe"],
+      env,
     });
 
     let stdout = "";
