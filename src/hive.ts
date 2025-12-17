@@ -3,6 +3,7 @@
  *
  * This module re-exports from focused submodules for backward compatibility.
  * For new code, prefer importing from specific modules:
+ * - hive-config.ts - Shared configuration (prevents circular deps)
  * - hive-strategies.ts - Strategy selection
  * - hive-decompose.ts - Task decomposition
  * - hive-prompts.ts - Prompt templates
@@ -12,6 +13,7 @@
  */
 
 // Re-export everything for backward compatibility
+export * from "./hive-config";
 export * from "./hive-strategies";
 export * from "./hive-decompose";
 export * from "./hive-prompts";

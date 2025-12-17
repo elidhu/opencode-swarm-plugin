@@ -16,17 +16,21 @@
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { executeCommand } from "./utils/cli-executor";
+import {
+  createDirectoryContext,
+  CONTEXT_NAMES,
+} from "./utils/directory-context";
 
 // ============================================================================
 // Working Directory Configuration
 // ============================================================================
 
 /**
- * Module-level working directory for bd commands.
- * Set this via setBeadsWorkingDirectory() before using tools.
+ * Directory context for bd commands.
+ * Uses the shared directory-context utility for consistent state management.
  * If not set, commands run in process.cwd() which may be wrong for plugins.
  */
-let beadsWorkingDirectory: string | null = null;
+const beadsDir = createDirectoryContext(CONTEXT_NAMES.BEADS);
 
 /**
  * Set the working directory for all beads commands.
@@ -35,7 +39,7 @@ let beadsWorkingDirectory: string | null = null;
  * @param directory - Absolute path to the project directory
  */
 export function setBeadsWorkingDirectory(directory: string): void {
-  beadsWorkingDirectory = directory;
+  beadsDir.set(directory);
 }
 
 /**
@@ -43,7 +47,7 @@ export function setBeadsWorkingDirectory(directory: string): void {
  * Returns the configured directory or process.cwd() as fallback.
  */
 export function getBeadsWorkingDirectory(): string {
-  return beadsWorkingDirectory || process.cwd();
+  return beadsDir.get();
 }
 
 /**

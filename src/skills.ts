@@ -36,6 +36,10 @@ import {
   sep,
 } from "path";
 import matter from "gray-matter";
+import {
+  createDirectoryContext,
+  CONTEXT_NAMES,
+} from "./utils/directory-context";
 
 // =============================================================================
 // Types
@@ -87,18 +91,33 @@ export interface SkillRef {
 // State
 // =============================================================================
 
-/** Cached project directory for skill discovery */
-let skillsProjectDirectory: string = process.cwd();
-
 /** Cached discovered skills (lazy-loaded) */
 let skillsCache: Map<string, Skill> | null = null;
 
 /**
+ * Directory context for skill discovery.
+ * Uses the shared directory-context utility with cache invalidation on change.
+ */
+const skillsDirectoryContext = createDirectoryContext(CONTEXT_NAMES.SKILLS, {
+  onChange: () => {
+    skillsCache = null; // Invalidate cache when directory changes
+  },
+});
+
+/**
  * Set the project directory for skill discovery
+ * @deprecated Use skillsDirectoryContext.set() directly for new code
  */
 export function setSkillsProjectDirectory(dir: string): void {
-  skillsProjectDirectory = dir;
-  skillsCache = null; // Invalidate cache when directory changes
+  skillsDirectoryContext.set(dir);
+}
+
+/**
+ * Get the current project directory for skill discovery
+ * @returns The configured project directory or process.cwd() if not set
+ */
+export function getSkillsProjectDirectory(): string {
+  return skillsDirectoryContext.get();
 }
 
 // =============================================================================
@@ -297,7 +316,7 @@ async function loadSkill(skillPath: string): Promise<Skill> {
 export async function discoverSkills(
   projectDir?: string,
 ): Promise<Map<string, Skill>> {
-  const dir = projectDir || skillsProjectDirectory;
+  const dir = projectDir || skillsDirectoryContext.get();
 
   // Return cached skills if available
   if (skillsCache && !projectDir) {
@@ -517,7 +536,7 @@ Scripts run in the skill's directory with the project directory as an argument.`
       // Execute script using Bun.spawn with timeout
       const TIMEOUT_MS = 60_000; // 60 second timeout
       const proc = Bun.spawn(
-        [scriptPath, skillsProjectDirectory, ...scriptArgs],
+        [scriptPath, skillsDirectoryContext.get(), ...scriptArgs],
         {
           cwd: skill.directory,
           stdout: "pipe",
@@ -925,7 +944,7 @@ Good skills have:
       skillDir = join(getClaudeGlobalSkillsDir(), args.name);
     } else {
       const baseDir = args.directory || DEFAULT_SKILLS_DIR;
-      skillDir = join(skillsProjectDirectory, baseDir, args.name);
+      skillDir = join(skillsDirectoryContext.get(), baseDir, args.name);
     }
     const skillPath = join(skillDir, "SKILL.md");
 
@@ -1359,7 +1378,7 @@ Perfect for learning to create effective skills.`,
       skillDir = join(getGlobalSkillsDir(), args.name);
     } else {
       const baseDir = args.directory || DEFAULT_SKILLS_DIR;
-      skillDir = join(skillsProjectDirectory, baseDir, args.name);
+      skillDir = join(skillsDirectoryContext.get(), baseDir, args.name);
     }
 
     const createdFiles: string[] = [];
@@ -1575,7 +1594,7 @@ export async function createSkillFromPattern(args: {
     }
 
     // Determine target directory
-    const skillDir = join(skillsProjectDirectory, DEFAULT_SKILLS_DIR, args.name);
+    const skillDir = join(skillsDirectoryContext.get(), DEFAULT_SKILLS_DIR, args.name);
     const skillPath = join(skillDir, "SKILL.md");
 
     // Create skill directory

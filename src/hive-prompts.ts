@@ -5,15 +5,18 @@
  * - Decomposition prompts (basic and strategy-specific)
  * - Subtask agent prompts (V1 and V2)
  * - Evaluation prompts
+ * - Spec generation prompts
  *
  * Key responsibilities:
  * - Prompt template definitions
  * - Prompt formatting/generation tools
  * - Template parameter substitution
+ * - Spec generation guidance
  */
 
 import { tool } from "@opencode-ai/plugin";
 import { getStorage } from "./storage";
+import { DEFAULT_SPEC_CONFIG } from "./hive-config";
 
 // ============================================================================
 // Prompt Templates
@@ -192,7 +195,7 @@ You MUST keep your bead updated as you work:
 
 **Never work silently.** Your bead status is how the hive tracks progress.
 
-## MANDATORY: Swarm Mail Communication
+## MANDATORY: Hive Mail Communication
 
 You MUST communicate with other agents:
 
@@ -201,7 +204,7 @@ You MUST communicate with other agents:
 3. **Announce blockers** immediately - don't spin trying to fix alone
 4. **Coordinate on shared concerns** - if you see something affecting other agents, say so
 
-Use Swarm Mail for all communication:
+Use Hive Mail for all communication:
 \`\`\`
 hivemail_send(
   to: ["coordinator" or specific agent],
@@ -215,7 +218,7 @@ hivemail_send(
 
 1. **Start**: Your bead is already marked in_progress
 2. **Progress**: Use hive_progress to report status updates
-3. **Blocked**: Report immediately via Swarm Mail - don't spin
+3. **Blocked**: Report immediately via Hive Mail - don't spin
 4. **Complete**: Use hive_complete when done - it handles:
    - Closing your bead with a summary
    - Releasing file reservations
@@ -237,15 +240,15 @@ Before writing code:
 1. **Read the files** you're assigned to understand current state
 2. **Plan your approach** - what changes, in what order?
 3. **Identify risks** - what could go wrong? What dependencies?
-4. **Communicate your plan** via Swarm Mail if non-trivial
+4. **Communicate your plan** via Hive Mail if non-trivial
 
 Begin work on your subtask now.`;
 
 /**
- * Streamlined subtask prompt (V2) - uses Swarm Mail and beads
+ * Streamlined subtask prompt (V2) - uses Hive Mail and beads
  *
  * This is a cleaner version of SUBTASK_PROMPT that's easier to parse.
- * Agents MUST use Swarm Mail for communication and beads for tracking.
+ * Agents MUST use Hive Mail for communication and beads for tracking.
  *
  * Supports {error_context} placeholder for retry prompts.
  */
@@ -272,9 +275,9 @@ Only modify these files. Need others? Message the coordinator.
 
 {error_context}
 
-## [MANDATORY: SWARM MAIL]
+## [MANDATORY: HIVE MAIL]
 
-**YOU MUST USE SWARM MAIL FOR ALL COORDINATION.** This is non-negotiable.
+**YOU MUST USE HIVE MAIL FOR ALL COORDINATION.** This is non-negotiable.
 
 ### Initialize FIRST (before any work)
 \`\`\`
@@ -338,17 +341,114 @@ As you work, note reusable patterns, best practices, or domain insights:
 - Good skills have clear "when to use" descriptions with actionable instructions
 - Skills make hives smarter over time
 
+## [SPECS] (Optional - for complex work)
+For complex subtasks (complexity >= 3), consider generating a spec:
+\`\`\`
+spec_quick_write(
+  capability: "derived-from-subtask-title",
+  title: "Subtask Specification",
+  purpose: "What this implements and why",
+  requirements: [{
+    name: "Requirement name",
+    type: "should",
+    description: "What the system should do",
+    scenarios: [{ name: "Scenario", given: "...", when: "...", then: ["..."] }]
+  }],
+  auto_approve: true,  # For routine tasks
+  confidence: 0.85
+)
+\`\`\`
+
+**When to use specs:**
+- Complexity >= 3 (medium to high)
+- Task type is "feature" or "epic"
+- You have open questions that need documenting
+- Requirements are unclear and need formal capture
+
+**Auto-approve when:**
+- Complexity <= 3 AND confidence >= 0.8 AND no open questions
+
 ## [WORKFLOW]
 1. **hivemail_init** - Initialize session FIRST
 2. Read assigned files
-3. Implement changes
-4. **hivemail_send** - Report progress to coordinator
-5. Verify (typecheck)
-6. **hive_complete** - Mark done, release reservations
+3. (Optional) **spec_quick_write** - For complex work, document requirements first
+4. Implement changes
+5. **hivemail_send** - Report progress to coordinator
+6. Verify (typecheck)
+7. **hive_complete** - Mark done, release reservations
 
 **CRITICAL: Never work silently. Send progress updates via hivemail_send every significant milestone.**
 
 Begin now.`;
+
+/**
+ * Prompt template for spec generation guidance
+ *
+ * Used to instruct agents on when and how to generate specs autonomously.
+ */
+export const SPEC_GENERATION_PROMPT = `## Specification Generation Guide
+
+When working on complex tasks, you may need to create specifications to document requirements before implementation.
+
+### When to Generate Specs
+
+| Condition | Generate Spec? | Auto-Approve? |
+|-----------|---------------|---------------|
+| complexity >= 4 | Yes | No (needs review) |
+| complexity == 3 | Yes | Yes (auto-approve) |
+| complexity <= 2 | No | N/A |
+| type == "feature" | Yes | Depends on complexity |
+| type == "bug" | No | N/A |
+| has open questions | Yes | No (needs human input) |
+
+### How to Use spec_quick_write
+
+For routine tasks (complexity <= 3, no open questions):
+\`\`\`
+spec_quick_write(
+  capability: "my-feature",
+  title: "My Feature Specification",
+  purpose: "Why this capability exists...",
+  requirements: [...],
+  auto_approve: true,
+  confidence: 0.85
+)
+\`\`\`
+
+For complex tasks (complexity >= 4 or has questions):
+\`\`\`
+spec_quick_write(
+  capability: "complex-feature",
+  title: "Complex Feature Specification",
+  purpose: "Why this capability exists...",
+  requirements: [...],
+  open_questions: ["Question 1?", "Question 2?"],
+  auto_approve: false,
+  confidence: 0.6
+)
+\`\`\`
+
+### Confidence Scoring
+
+- **0.85+**: High confidence, clear requirements, auto-approve safe
+- **0.7-0.84**: Medium confidence, may auto-approve for simple tasks
+- **0.5-0.69**: Low confidence, requires human review
+- **<0.5**: Very low confidence, should not proceed without clarification
+
+### After Spec Approval
+
+Once a spec is approved (auto or human):
+1. Use \`spec_implement()\` to create implementation beads
+2. Work on the beads following the spec requirements
+3. Reference spec scenarios for acceptance criteria
+
+### Key Principles
+
+- **Specs capture decisions** - Document the "why" before coding
+- **Auto-approve routine work** - Don't block on obvious tasks
+- **Request review for complexity** - High complexity needs human input
+- **Open questions block auto-approve** - Uncertainty requires clarification
+`;
 
 /**
  * Prompt for self-evaluation before completing a subtask.
@@ -471,6 +571,87 @@ export function formatEvaluationPrompt(params: {
     .replace("{files_touched}", filesList || "(no files recorded)");
 }
 
+/**
+ * Format the spec generation prompt with context
+ *
+ * @param params - Customization parameters
+ * @returns Formatted spec generation guidance
+ */
+export function formatSpecGenerationPrompt(params?: {
+  include_examples?: boolean;
+  task_complexity?: number;
+  task_type?: string;
+  has_open_questions?: boolean;
+}): string {
+  let prompt = SPEC_GENERATION_PROMPT;
+
+  // Add contextual recommendations based on params
+  if (params) {
+    const recommendations: string[] = [];
+
+    if (params.task_complexity !== undefined) {
+      if (params.task_complexity >= 4) {
+        recommendations.push(
+          "**Your task has high complexity (>=4)**. Generate a spec and submit for human review.",
+        );
+      } else if (params.task_complexity === 3) {
+        recommendations.push(
+          "**Your task has medium complexity (3)**. You may auto-approve the spec if confident.",
+        );
+      } else {
+        recommendations.push(
+          "**Your task has low complexity (<=2)**. Spec generation is optional.",
+        );
+      }
+    }
+
+    if (params.task_type) {
+      if (params.task_type === "feature" || params.task_type === "epic") {
+        recommendations.push(
+          `**Task type '${params.task_type}'** typically requires spec documentation.`,
+        );
+      } else if (params.task_type === "bug") {
+        recommendations.push(
+          "**Bug fixes** usually don't need specs - focus on the fix.",
+        );
+      }
+    }
+
+    if (params.has_open_questions) {
+      recommendations.push(
+        "**You have open questions**. Document them in the spec and DO NOT auto-approve.",
+      );
+    }
+
+    if (recommendations.length > 0) {
+      prompt += `\n\n### Your Context\n\n${recommendations.join("\n\n")}`;
+    }
+  }
+
+  return prompt;
+}
+
+/**
+ * Get spec generation decision criteria as a prompt section
+ *
+ * This is a condensed version for injection into other prompts.
+ */
+export function getSpecDecisionCriteria(): string {
+  return `### Spec Generation Decision Criteria
+
+| Complexity | Generate? | Auto-Approve? |
+|------------|-----------|---------------|
+| >= 4       | Yes       | No (review)   |
+| 3          | Yes       | Yes           |
+| <= 2       | Optional  | N/A           |
+
+**Type overrides:**
+- feature/epic: Always consider specs
+- bug/chore: Skip specs
+
+**Open questions:** Always block auto-approval`;
+}
+
 // ============================================================================
 // Tool Definitions
 // ============================================================================
@@ -515,12 +696,12 @@ export const hive_subtask_prompt = tool({
 /**
  * Prepare a subtask for spawning with Task tool (V2 prompt)
  *
- * Generates a streamlined prompt that tells agents to USE Agent Mail and beads.
+ * Generates a streamlined prompt that tells agents to USE Hive Mail and beads.
  * Returns JSON that can be directly used with Task tool.
  */
 export const hive_spawn_subtask = tool({
   description:
-    "Prepare a subtask for spawning. Returns prompt with Agent Mail/beads instructions.",
+    "Prepare a subtask for spawning. Returns prompt with Hive Mail/beads instructions.",
   args: {
     bead_id: tool.schema.string().describe("Subtask bead ID"),
     epic_id: tool.schema.string().describe("Parent epic bead ID"),
@@ -744,9 +925,111 @@ export const hive_plan_prompt = tool({
   },
 });
 
+/**
+ * Get spec generation guidance prompt
+ *
+ * Returns guidance on when and how to use spec_quick_write based on
+ * the current task context.
+ */
+export const hive_spec_guidance = tool({
+  description: `Get spec generation guidance. Returns when/how to use spec_quick_write based on task context.
+
+Use this when you need to decide whether to generate a spec for your subtask.`,
+  args: {
+    task_complexity: tool.schema
+      .number()
+      .min(1)
+      .max(5)
+      .optional()
+      .describe("Estimated complexity of your task (1-5)"),
+    task_type: tool.schema
+      .enum(["feature", "epic", "task", "bug", "chore"])
+      .optional()
+      .describe("Type of task you're working on"),
+    has_open_questions: tool.schema
+      .boolean()
+      .optional()
+      .describe("Whether you have unresolved questions"),
+    include_full_guide: tool.schema
+      .boolean()
+      .default(false)
+      .describe("Include full spec generation guide (default: condensed)"),
+  },
+  async execute(args) {
+    const guidance = args.include_full_guide
+      ? formatSpecGenerationPrompt({
+          task_complexity: args.task_complexity,
+          task_type: args.task_type,
+          has_open_questions: args.has_open_questions,
+        })
+      : getSpecDecisionCriteria();
+
+    // Provide concrete recommendation
+    let recommendation: string;
+    let shouldGenerateSpec = false;
+    let shouldAutoApprove = false;
+
+    const complexity = args.task_complexity ?? 2;
+    const taskType = args.task_type ?? "task";
+    const hasQuestions = args.has_open_questions ?? false;
+
+    // Apply decision logic
+    if (taskType === "bug" || taskType === "chore") {
+      recommendation = `Task type '${taskType}' - skip spec generation`;
+    } else if (complexity >= 4) {
+      shouldGenerateSpec = true;
+      shouldAutoApprove = false;
+      recommendation = "High complexity - generate spec and request human review";
+    } else if (complexity === 3) {
+      shouldGenerateSpec = true;
+      shouldAutoApprove = !hasQuestions;
+      recommendation = hasQuestions
+        ? "Medium complexity with questions - generate spec, no auto-approve"
+        : "Medium complexity - generate spec with auto-approve";
+    } else {
+      recommendation = "Low complexity - spec optional (skip unless documenting for future)";
+    }
+
+    return JSON.stringify(
+      {
+        guidance,
+        recommendation,
+        decision: {
+          should_generate_spec: shouldGenerateSpec,
+          should_auto_approve: shouldAutoApprove,
+          confidence: shouldAutoApprove ? 0.85 : hasQuestions ? 0.6 : 0.75,
+        },
+        context: {
+          task_complexity: complexity,
+          task_type: taskType,
+          has_open_questions: hasQuestions,
+        },
+        usage_example: shouldGenerateSpec
+          ? `spec_quick_write({
+  capability: "your-capability-slug",
+  title: "Your Spec Title",
+  purpose: "Why this capability exists (min 20 chars)",
+  requirements: [{
+    name: "Requirement",
+    type: "should",
+    description: "What the system should do",
+    scenarios: [{ name: "Basic", given: "...", when: "...", then: ["..."] }]
+  }],
+  auto_approve: ${shouldAutoApprove},
+  confidence: ${shouldAutoApprove ? 0.85 : 0.6}
+})`
+          : "No spec needed for this task",
+      },
+      null,
+      2,
+    );
+  },
+});
+
 export const promptTools = {
   hive_subtask_prompt,
   hive_spawn_subtask,
   hive_evaluation_prompt,
   hive_plan_prompt,
+  hive_spec_guidance,
 };

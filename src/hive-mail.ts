@@ -43,6 +43,10 @@ import {
   loadSessionState,
   saveSessionState,
 } from "./hive-tool-helpers";
+import {
+  createDirectoryContext,
+  CONTEXT_NAMES,
+} from "./utils/directory-context";
 
 // ============================================================================
 // Types
@@ -114,12 +118,12 @@ interface AckArgs {
 const MAX_INBOX_LIMIT = 5; // HARD CAP - context preservation
 
 /**
- * Default project directory for Swarm Mail operations
+ * Directory context for Swarm Mail operations.
  *
  * This is set by the plugin init to the actual working directory (from OpenCode).
  * Without this, tools might use the plugin's directory instead of the project's.
  */
-let hiveMailProjectDirectory: string | null = null;
+const hiveMailDirContext = createDirectoryContext(CONTEXT_NAMES.HIVE_MAIL);
 
 /**
  * Set the default project directory for Swarm Mail operations
@@ -127,7 +131,7 @@ let hiveMailProjectDirectory: string | null = null;
  * Called during plugin initialization with the actual project directory.
  */
 export function setHiveMailProjectDirectory(directory: string): void {
-  hiveMailProjectDirectory = directory;
+  hiveMailDirContext.set(directory);
 }
 
 /**
@@ -135,7 +139,7 @@ export function setHiveMailProjectDirectory(directory: string): void {
  * Returns undefined if not set - let getDatabasePath use global fallback
  */
 export function getHiveMailProjectDirectory(): string | undefined {
-  return hiveMailProjectDirectory ?? undefined;
+  return hiveMailDirContext.getStrict();
 }
 
 // ============================================================================

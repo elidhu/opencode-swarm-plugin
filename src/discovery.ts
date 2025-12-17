@@ -34,16 +34,20 @@ import {
   type DiscoveryPromoteResult,
 } from "./schemas/discovery";
 import type { Bead } from "./schemas/bead";
+import {
+  createDirectoryContext,
+  CONTEXT_NAMES,
+} from "./utils/directory-context";
 
 // ============================================================================
 // Working Directory Configuration
 // ============================================================================
 
 /**
- * Module-level working directory for discovery operations.
+ * Directory context for discovery operations.
  * Set this via setDiscoveryWorkingDirectory() before using tools.
  */
-let discoveryWorkingDirectory: string | null = null;
+const discoveryDirContext = createDirectoryContext(CONTEXT_NAMES.DISCOVERY);
 
 /**
  * Set the working directory for discovery operations.
@@ -52,14 +56,14 @@ let discoveryWorkingDirectory: string | null = null;
  * @param directory - Absolute path to the project directory
  */
 export function setDiscoveryWorkingDirectory(directory: string): void {
-  discoveryWorkingDirectory = directory;
+  discoveryDirContext.set(directory);
 }
 
 /**
  * Get the current working directory for discovery operations.
  */
 export function getDiscoveryWorkingDirectory(): string {
-  return discoveryWorkingDirectory || process.cwd();
+  return discoveryDirContext.get();
 }
 
 // ============================================================================

@@ -17,10 +17,32 @@
  * - hive_broadcast - Mid-task context sharing
  * - Error accumulation tools
  * - 3-strike detection for architectural problems
+ *
+ * Note: Verification gate logic has been extracted to hive-verification.ts
  */
 
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
+
+// Import verification gate functions and types from hive-verification.ts
+import {
+  runVerificationGate,
+  classifyFailure,
+  type VerificationStep,
+  type VerificationGateResult,
+} from "./hive-verification";
+
+// Re-export verification types and functions for backward compatibility
+export {
+  runVerificationGate,
+  runTypecheckVerification,
+  runTestVerification,
+  classifyFailure,
+  createVerificationPrompt,
+  formatVerificationResult,
+  type VerificationStep,
+  type VerificationGateResult,
+} from "./hive-verification";
 import {
   type AgentProgress,
   AgentProgressSchema,
@@ -76,6 +98,356 @@ import {
   type CheckpointRecoverArgs,
   type DecompositionStrategy,
 } from "./schemas/checkpoint";
+import { spec_quick_write, loadSpec } from "./spec";
+
+// ============================================================================
+// Beads CLI Isolation for Testing
+// ============================================================================
+
+/**
+ * Module-level beads working directory for test isolation.
+ * When set, all bd CLI commands run in this directory instead of cwd.
+ * This allows integration tests to use an ephemeral beads database.
+ * 
+ * Set via setBeadsTestDir() before running tests.
+ * Clear with setBeadsTestDir(null) after tests.
+ */
+let beadsTestDir: string | null = null;
+
+/**
+ * Set the beads test directory for isolation.
+ * When set, all bd CLI commands in this module run in this directory.
+ * 
+ * @param dir - Absolute path to temp directory with initialized beads, or null to use cwd
+ */
+export function setBeadsTestDir(dir: string | null): void {
+  beadsTestDir = dir;
+}
+
+/**
+ * Get the current beads test directory.
+ */
+export function getBeadsTestDir(): string | null {
+  return beadsTestDir;
+}
+
+/**
+ * Run a bd CLI command, respecting test isolation.
+ * If beadsTestDir is set, runs command in that directory.
+ * Otherwise runs in current working directory.
+ */
+async function runBdCommand(
+  args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const cmd = Bun.$`bd ${args}`.quiet().nothrow();
+  const result = beadsTestDir ? await cmd.cwd(beadsTestDir) : await cmd;
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  };
+}
+
+// ============================================================================
+// Spec Generation Types (re-exported from hive-config.ts)
+// ============================================================================
+
+// Import shared config from hive-config.ts to avoid circular dependencies
+// hive-prompts.ts also imports from hive-config.ts
+export {
+  type SpecGenerationConfig,
+  DEFAULT_SPEC_CONFIG,
+  type SpecGenerationDecision,
+  type SubtaskForSpec,
+} from "./hive-config";
+
+// Local import for use in this module
+import {
+  DEFAULT_SPEC_CONFIG,
+  type SpecGenerationConfig,
+  type SpecGenerationDecision,
+  type SubtaskForSpec,
+} from "./hive-config";
+
+// ============================================================================
+// Spec Generation Helpers
+// ============================================================================
+
+/**
+ * Determine if a spec should be generated for a subtask
+ *
+ * Decision criteria:
+ * | Condition | Generate Spec? | Auto-Approve? |
+ * |-----------|---------------|---------------|
+ * | complexity >= 4 | Yes | No (needs review) |
+ * | complexity == 3 | Yes | Yes |
+ * | complexity <= 2 | No | N/A |
+ * | type == "feature" | Yes | Depends on complexity |
+ * | type == "bug" | No | N/A |
+ * | has open questions | Yes | No |
+ *
+ * @param subtask - The subtask to analyze
+ * @param taskType - Type of the parent task
+ * @param hasOpenQuestions - Whether there are unresolved questions
+ * @param config - Configuration overrides
+ * @returns Decision about spec generation
+ */
+export function shouldGenerateSpec(
+  subtask: SubtaskForSpec,
+  taskType: "feature" | "epic" | "task" | "bug" | "chore" = "task",
+  hasOpenQuestions: boolean = false,
+  config: Partial<SpecGenerationConfig> = {},
+): SpecGenerationDecision {
+  const cfg = { ...DEFAULT_SPEC_CONFIG, ...config };
+
+  // Skip types that shouldn't generate specs
+  if (cfg.skip_types.includes(taskType as "bug" | "chore")) {
+    return {
+      should_generate: false,
+      auto_approve: false,
+      reasoning: `Task type '${taskType}' is configured to skip spec generation`,
+      confidence: 0,
+    };
+  }
+
+  const complexity = subtask.estimated_complexity;
+
+  // Low complexity tasks don't need specs
+  if (complexity < cfg.complexity_threshold) {
+    return {
+      should_generate: false,
+      auto_approve: false,
+      reasoning: `Complexity ${complexity} is below threshold ${cfg.complexity_threshold}`,
+      confidence: 0,
+    };
+  }
+
+  // Calculate confidence based on multiple factors
+  let confidence = cfg.default_confidence;
+
+  // Adjust confidence based on complexity clarity
+  if (complexity === 3) {
+    confidence = 0.85; // Medium complexity, clear scope
+  } else if (complexity >= 4) {
+    confidence = 0.65; // High complexity, may need review
+  }
+
+  // Open questions reduce confidence and prevent auto-approval
+  if (hasOpenQuestions) {
+    confidence = Math.min(confidence, 0.6); // Cap at 0.6 with open questions
+    return {
+      should_generate: true,
+      auto_approve: false,
+      reasoning: `Complexity ${complexity} triggers spec generation, but open questions prevent auto-approval`,
+      confidence,
+    };
+  }
+
+  // Feature/epic types always generate specs when threshold met
+  if (cfg.spec_types.includes(taskType as "feature" | "epic" | "task")) {
+    // Auto-approve only at medium complexity without open questions
+    const autoApprove = complexity <= cfg.auto_approve_complexity;
+
+    return {
+      should_generate: true,
+      auto_approve: autoApprove,
+      reasoning: autoApprove
+        ? `Complexity ${complexity} with type '${taskType}' qualifies for auto-approved spec`
+        : `Complexity ${complexity} exceeds auto-approve threshold (${cfg.auto_approve_complexity}) - requires review`,
+      confidence,
+    };
+  }
+
+  // Default: generate spec but require review
+  return {
+    should_generate: true,
+    auto_approve: false,
+    reasoning: `Complexity ${complexity} triggers spec generation with human review`,
+    confidence,
+  };
+}
+
+/**
+ * Generate a spec for a subtask using spec_quick_write
+ *
+ * Creates a lightweight spec from subtask information. Uses auto-approval
+ * when the decision allows it.
+ *
+ * @param subtask - Subtask to generate spec for
+ * @param epicTitle - Title of the parent epic
+ * @param decision - Spec generation decision (from shouldGenerateSpec)
+ * @param ctx - Tool execution context
+ * @returns Spec creation result
+ */
+export async function generateSubtaskSpec(
+  subtask: SubtaskForSpec,
+  epicTitle: string,
+  decision: SpecGenerationDecision,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+): Promise<{
+  success: boolean;
+  spec_id?: string;
+  auto_approved?: boolean;
+  error?: string;
+}> {
+  if (!decision.should_generate) {
+    return {
+      success: false,
+      error: "Spec generation not triggered",
+    };
+  }
+
+  try {
+    // Generate capability slug from title
+    const capability = subtask.title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .slice(0, 50);
+
+    // Create minimal requirement from subtask description
+    const requirements = [
+      {
+        name: subtask.title.slice(0, 50),
+        type: "should" as const,
+        description: subtask.description || `Implement ${subtask.title}`,
+        scenarios: [
+          {
+            name: "Basic functionality",
+            given: "The system is in its default state",
+            when: `The ${subtask.title} operation is performed`,
+            then: ["The operation completes successfully"],
+          },
+        ],
+      },
+    ];
+
+    // Call spec_quick_write
+    const result = await spec_quick_write.execute(
+      {
+        capability,
+        title: `[AUTO] ${subtask.title}`,
+        purpose: `Auto-generated spec for subtask in epic: ${epicTitle}. ${subtask.description || ""}`.slice(
+          0,
+          200,
+        ),
+        requirements,
+        auto_approve: decision.auto_approve,
+        confidence: decision.confidence,
+        tags: ["auto-generated", "hive-orchestration"],
+      },
+      ctx,
+    );
+
+    const parsed = JSON.parse(result);
+
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: parsed.error || "Unknown error creating spec",
+      };
+    }
+
+    return {
+      success: true,
+      spec_id: parsed.spec_id,
+      auto_approved: parsed.auto_approved,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to generate spec: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Check if spec generation should be triggered based on explicit flag or heuristics
+ *
+ * This function consolidates all spec generation triggers:
+ * 1. Explicit --spec flag
+ * 2. Task complexity threshold
+ * 3. Task type matching
+ * 4. Subtask count threshold
+ *
+ * @param options - Trigger evaluation options
+ * @returns Whether specs should be generated
+ */
+export function isSpecGenerationTriggered(options: {
+  explicit_flag?: boolean;
+  task_complexity?: number;
+  task_type?: string;
+  subtask_count?: number;
+  config?: Partial<SpecGenerationConfig>;
+}): {
+  triggered: boolean;
+  reason: string;
+} {
+  const cfg = { ...DEFAULT_SPEC_CONFIG, ...(options.config || {}) };
+
+  // Explicit flag takes precedence
+  if (options.explicit_flag === true) {
+    return {
+      triggered: true,
+      reason: "Explicit --spec flag provided",
+    };
+  }
+
+  if (options.explicit_flag === false) {
+    return {
+      triggered: false,
+      reason: "Spec generation explicitly disabled",
+    };
+  }
+
+  // Check task type
+  if (options.task_type) {
+    if (cfg.skip_types.includes(options.task_type as "bug" | "chore")) {
+      return {
+        triggered: false,
+        reason: `Task type '${options.task_type}' skips spec generation`,
+      };
+    }
+
+    if (cfg.spec_types.includes(options.task_type as "feature" | "epic" | "task")) {
+      // Feature/epic tasks generate specs if complexity is sufficient
+      if (
+        options.task_complexity !== undefined &&
+        options.task_complexity >= cfg.complexity_threshold
+      ) {
+        return {
+          triggered: true,
+          reason: `Task type '${options.task_type}' with complexity ${options.task_complexity}`,
+        };
+      }
+    }
+  }
+
+  // Check complexity threshold alone
+  if (
+    options.task_complexity !== undefined &&
+    options.task_complexity >= cfg.complexity_threshold
+  ) {
+    return {
+      triggered: true,
+      reason: `Task complexity ${options.task_complexity} >= threshold ${cfg.complexity_threshold}`,
+    };
+  }
+
+  // Check subtask count (many subtasks suggests complexity)
+  if (options.subtask_count !== undefined && options.subtask_count > 5) {
+    return {
+      triggered: true,
+      reason: `High subtask count (${options.subtask_count}) suggests complex task`,
+    };
+  }
+
+  return {
+    triggered: false,
+    reason: "No spec generation triggers matched",
+  };
+}
 
 // ============================================================================
 // Helper Functions
@@ -92,21 +464,19 @@ async function queryEpicSubtasks(epicId: string): Promise<Bead[]> {
     return []; // Return empty - hive can still function without status tracking
   }
 
-  const result = await Bun.$`bd list --parent ${epicId} --json`
-    .quiet()
-    .nothrow();
+  const result = await runBdCommand(["list", "--parent", epicId, "--json"]);
 
   if (result.exitCode !== 0) {
     // Don't throw - just return empty and log error prominently
     console.error(
       `[hive] ERROR: Failed to query subtasks for epic ${epicId}:`,
-      result.stderr.toString(),
+      result.stderr,
     );
     return [];
   }
 
   try {
-    const parsed = JSON.parse(result.stdout.toString());
+    const parsed = JSON.parse(result.stdout);
     return z.array(BeadSchema).parse(parsed);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -183,240 +553,10 @@ function formatProgressMessage(progress: AgentProgress): string {
 }
 
 // ============================================================================
-// Verification Gate
+// Verification Gate (imported from hive-verification.ts)
 // ============================================================================
-
-/**
- * Verification Gate result - tracks each verification step
- *
- * Based on the Gate Function from superpowers:
- * 1. IDENTIFY: What command proves this claim?
- * 2. RUN: Execute the FULL command (fresh, complete)
- * 3. READ: Full output, check exit code, count failures
- * 4. VERIFY: Does output confirm the claim?
- * 5. ONLY THEN: Make the claim
- */
-interface VerificationStep {
-  name: string;
-  command: string;
-  passed: boolean;
-  exitCode: number;
-  output?: string;
-  error?: string;
-  skipped?: boolean;
-  skipReason?: string;
-}
-
-interface VerificationGateResult {
-  passed: boolean;
-  steps: VerificationStep[];
-  summary: string;
-  blockers: string[];
-}
-
-/**
- * Run typecheck verification
- *
- * Attempts to run TypeScript type checking on the project.
- * Falls back gracefully if tsc is not available.
- */
-async function runTypecheckVerification(): Promise<VerificationStep> {
-  const step: VerificationStep = {
-    name: "typecheck",
-    command: "tsc --noEmit",
-    passed: false,
-    exitCode: -1,
-  };
-
-  try {
-    // Check if tsconfig.json exists in current directory
-    const tsconfigExists = await Bun.file("tsconfig.json").exists();
-    if (!tsconfigExists) {
-      step.skipped = true;
-      step.skipReason = "No tsconfig.json found";
-      step.passed = true; // Don't block if no TypeScript
-      return step;
-    }
-
-    const result = await Bun.$`tsc --noEmit`.quiet().nothrow();
-    step.exitCode = result.exitCode;
-    step.passed = result.exitCode === 0;
-
-    if (!step.passed) {
-      step.error = result.stderr.toString().slice(0, 1000); // Truncate for context
-      step.output = result.stdout.toString().slice(0, 1000);
-    }
-  } catch (error) {
-    step.skipped = true;
-    step.skipReason = `tsc not available: ${error instanceof Error ? error.message : String(error)}`;
-    step.passed = true; // Don't block if tsc unavailable
-  }
-
-  return step;
-}
-
-/**
- * Run test verification for specific files
- *
- * Attempts to find and run tests related to the touched files.
- * Uses common test patterns (*.test.ts, *.spec.ts, __tests__/).
- */
-async function runTestVerification(
-  filesTouched: string[],
-): Promise<VerificationStep> {
-  const step: VerificationStep = {
-    name: "tests",
-    command: "bun test <related-files>",
-    passed: false,
-    exitCode: -1,
-  };
-
-  if (filesTouched.length === 0) {
-    step.skipped = true;
-    step.skipReason = "No files touched";
-    step.passed = true;
-    return step;
-  }
-
-  // Find test files related to touched files
-  const testPatterns: string[] = [];
-  for (const file of filesTouched) {
-    // Skip if already a test file
-    if (file.includes(".test.") || file.includes(".spec.")) {
-      testPatterns.push(file);
-      continue;
-    }
-
-    // Look for corresponding test file
-    const baseName = file.replace(/\.(ts|tsx|js|jsx)$/, "");
-    testPatterns.push(`${baseName}.test.ts`);
-    testPatterns.push(`${baseName}.test.tsx`);
-    testPatterns.push(`${baseName}.spec.ts`);
-  }
-
-  // Check if any test files exist
-  const existingTests: string[] = [];
-  for (const pattern of testPatterns) {
-    try {
-      const exists = await Bun.file(pattern).exists();
-      if (exists) {
-        existingTests.push(pattern);
-      }
-    } catch {
-      // File doesn't exist, skip
-    }
-  }
-
-  if (existingTests.length === 0) {
-    step.skipped = true;
-    step.skipReason = "No related test files found";
-    step.passed = true;
-    return step;
-  }
-
-  try {
-    step.command = `bun test ${existingTests.join(" ")}`;
-    const result = await Bun.$`bun test ${existingTests}`.quiet().nothrow();
-    step.exitCode = result.exitCode;
-    step.passed = result.exitCode === 0;
-
-    if (!step.passed) {
-      step.error = result.stderr.toString().slice(0, 1000);
-      step.output = result.stdout.toString().slice(0, 1000);
-    }
-  } catch (error) {
-    step.skipped = true;
-    step.skipReason = `Test runner failed: ${error instanceof Error ? error.message : String(error)}`;
-    step.passed = true; // Don't block if test runner unavailable
-  }
-
-  return step;
-}
-
-/**
- * Run the full Verification Gate
- *
- * Implements the Gate Function (IDENTIFY → RUN → READ → VERIFY → CLAIM):
- * 1. Typecheck
- * 2. Tests for touched files
- *
- * All steps must pass (or be skipped with valid reason) to proceed.
- */
-async function runVerificationGate(
-  filesTouched: string[],
-): Promise<VerificationGateResult> {
-  const steps: VerificationStep[] = [];
-  const blockers: string[] = [];
-
-  // Step 1: Typecheck
-  const typecheckStep = await runTypecheckVerification();
-  steps.push(typecheckStep);
-  if (!typecheckStep.passed && !typecheckStep.skipped) {
-    blockers.push(
-      `Typecheck failed: ${typecheckStep.error?.slice(0, 100) || "type errors found"}. Try: Run 'tsc --noEmit' to see full errors, check tsconfig.json configuration, or fix reported type errors in modified files.`,
-    );
-  }
-
-  // Step 3: Tests
-  const testStep = await runTestVerification(filesTouched);
-  steps.push(testStep);
-  if (!testStep.passed && !testStep.skipped) {
-    blockers.push(
-      `Tests failed: ${testStep.error?.slice(0, 100) || "test failures"}. Try: Run 'bun test ${testStep.command.split(" ").slice(2).join(" ")}' to see full output, check test assertions, or fix failing tests in modified files.`,
-    );
-  }
-
-  // Build summary
-  const passedCount = steps.filter((s) => s.passed).length;
-  const skippedCount = steps.filter((s) => s.skipped).length;
-  const failedCount = steps.filter((s) => !s.passed && !s.skipped).length;
-
-  const summary =
-    failedCount === 0
-      ? `Verification passed: ${passedCount} checks passed, ${skippedCount} skipped`
-      : `Verification FAILED: ${failedCount} checks failed, ${passedCount} passed, ${skippedCount} skipped`;
-
-  return {
-    passed: failedCount === 0,
-    steps,
-    summary,
-    blockers,
-  };
-}
-
-/**
- * Classify failure based on error message heuristics
- *
- * Simple pattern matching to categorize why a task failed.
- * Used when failure_mode is not explicitly provided.
- *
- * @param error - Error object or message
- * @returns FailureMode classification
- */
-function classifyFailure(error: Error | string): string {
-  const msg = (typeof error === "string" ? error : error.message).toLowerCase();
-
-  if (msg.includes("timeout")) return "timeout";
-  if (msg.includes("conflict") || msg.includes("reservation"))
-    return "conflict";
-  if (msg.includes("validation") || msg.includes("schema")) return "validation";
-  if (msg.includes("context") || msg.includes("token"))
-    return "context_overflow";
-  if (msg.includes("blocked") || msg.includes("dependency"))
-    return "dependency_blocked";
-  if (msg.includes("cancel")) return "user_cancelled";
-
-  // Check for tool failure patterns
-  if (
-    msg.includes("tool") ||
-    msg.includes("command") ||
-    msg.includes("failed to execute")
-  ) {
-    return "tool_failure";
-  }
-
-  return "unknown";
-}
+// Note: Verification types and functions are now in hive-verification.ts
+// They are imported at the top of this file and re-exported for backward compatibility
 
 // ============================================================================
 // Global Storage
@@ -706,9 +846,7 @@ export const hive_progress = tool({
     // Update bead status if needed
     if (args.status === "blocked" || args.status === "in_progress") {
       const beadStatus = args.status === "blocked" ? "blocked" : "in_progress";
-      await Bun.$`bd update ${args.bead_id} --status ${beadStatus} --json`
-        .quiet()
-        .nothrow();
+      await runBdCommand(["update", args.bead_id, "--status", beadStatus, "--json"]);
     }
 
     // Extract epic ID from bead ID (e.g., bd-abc123.1 -> bd-abc123)
@@ -980,14 +1118,13 @@ export const hive_complete = tool({
     }
 
     // Close the bead
-    const closeResult =
-      await Bun.$`bd close ${args.bead_id} --reason ${args.summary} --json`
-        .quiet()
-        .nothrow();
+    const closeResult = await runBdCommand([
+      "close", args.bead_id, "--reason", args.summary, "--json"
+    ]);
 
     if (closeResult.exitCode !== 0) {
       throw new Error(
-        `Failed to close bead because bd close command failed: ${closeResult.stderr.toString()}. Try: Verify bead exists and is not already closed with 'bd show ${args.bead_id}', check if bead ID is correct with 'beads_query()', or use beads_close tool directly.`,
+        `Failed to close bead because bd close command failed: ${closeResult.stderr}. Try: Verify bead exists and is not already closed with 'bd show ${args.bead_id}', check if bead ID is correct with 'beads_query()', or use beads_close tool directly.`,
       );
     }
 
@@ -2071,6 +2208,662 @@ ${args.files_context && args.files_context.length > 0 ? `## Reference Files\n\n$
 });
 
 // ============================================================================
+// Single-Task Traceability Tools
+// ============================================================================
+
+/**
+ * Create a tracking bead for single-agent work
+ *
+ * Philosophy: "Even simple tasks deserve observability"
+ *
+ * This tool enables single-agent tasks to participate in the same
+ * observability infrastructure as full hive decompositions:
+ * - Creates a task bead for tracking
+ * - Enables checkpointing for crash recovery
+ * - Integrates with hive_progress, hive_checkpoint, hive_complete
+ * - Stores success patterns on completion
+ *
+ * Use this when:
+ * - Working on a task that doesn't need multi-agent decomposition
+ * - You want crash recovery and progress tracking
+ * - The task might spawn child tasks as complexity emerges
+ *
+ * @example
+ * ```typescript
+ * // Start tracking a single task
+ * const result = await hive_track_single({
+ *   project_key: "/path/to/project",
+ *   task_description: "Implement login feature",
+ *   files: ["src/auth.ts", "src/login.tsx"],
+ *   priority: 1,
+ * });
+ *
+ * // Use the returned bead_id with other hive tools
+ * await hive_progress({ bead_id: result.bead_id, ... });
+ * await hive_complete({ bead_id: result.bead_id, ... });
+ * ```
+ */
+export const hive_track_single = tool({
+  description: `Create a tracking bead for single-agent work. 
+
+Philosophy: "Even simple tasks deserve observability"
+
+Use this to get crash recovery, progress tracking, and pattern learning for tasks that don't need full hive decomposition. Returns a bead_id that integrates with hive_progress, hive_checkpoint, and hive_complete.`,
+  args: {
+    project_key: tool.schema.string().describe("Project path (absolute path to project root)"),
+    task_description: tool.schema.string().describe("Description of the task you're working on"),
+    files: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Files you expect to modify (enables checkpointing)"),
+    priority: tool.schema
+      .number()
+      .min(0)
+      .max(3)
+      .optional()
+      .describe("Task priority 0-3 (default: 2, lower = higher priority)"),
+    agent_name: tool.schema
+      .string()
+      .optional()
+      .describe("Agent name for tracking (auto-generated if not provided)"),
+  },
+  async execute(args) {
+    // Generate agent name if not provided
+    const agentName = args.agent_name || `single-${Date.now().toString(36)}`;
+    
+    // Create the tracking bead using bd CLI
+    const createArgs = [
+      "create",
+      args.task_description.slice(0, 100), // Title (truncated)
+      "-t", "task",
+      "-p", String(args.priority ?? 2),
+      "-d", `Single-agent tracked task.\n\nAgent: ${agentName}\nFiles: ${args.files?.join(", ") || "none specified"}`,
+      "--json",
+    ];
+
+    const result = await runBdCommand(createArgs);
+
+    if (result.exitCode !== 0) {
+      // Check if beads is initialized
+      const initCheck = await runBdCommand(["list", "--json"]);
+      if (initCheck.exitCode !== 0) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: "Beads not initialized",
+            hint: "Run 'bd init' in the project root to initialize beads tracking",
+          },
+          null,
+          2,
+        );
+      }
+
+      return JSON.stringify(
+        {
+          success: false,
+          error: `Failed to create tracking bead: ${result.stderr}`,
+          hint: "Check if bd CLI is installed and working with 'bd --version'",
+        },
+        null,
+        2,
+      );
+    }
+
+    // Parse the created bead
+    const stdout = result.stdout.trim();
+    let bead: { id: string; title: string; status: string };
+    try {
+      const parsed = JSON.parse(stdout);
+      bead = Array.isArray(parsed) ? parsed[0] : parsed;
+    } catch (error) {
+      return JSON.stringify(
+        {
+          success: false,
+          error: `Failed to parse bead response: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        null,
+        2,
+      );
+    }
+
+    // Save initial checkpoint for recovery support
+    let checkpointSaved = false;
+    try {
+      await saveCheckpoint(
+        {
+          epic_id: bead.id, // Single tasks are their own "epic"
+          bead_id: bead.id,
+          agent_name: agentName,
+          task_description: args.task_description,
+          files: args.files || [],
+          strategy: "auto", // Single tasks use auto strategy
+          progress_percent: 0,
+          last_milestone: "started",
+          files_touched: [],
+        },
+        args.project_key,
+      );
+      checkpointSaved = true;
+    } catch (error) {
+      // Non-fatal - just log warning
+      console.warn(
+        `[hive_track_single] Failed to save initial checkpoint: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    // Mark bead as in-progress
+    await runBdCommand(["update", bead.id, "--status", "in_progress", "--json"]);
+
+    return JSON.stringify(
+      {
+        success: true,
+        bead_id: bead.id,
+        agent_name: agentName,
+        task_description: args.task_description,
+        files: args.files || [],
+        checkpoint_enabled: checkpointSaved,
+        next_steps: [
+          `Use hive_progress(bead_id="${bead.id}", ...) to report progress`,
+          `Use hive_checkpoint(bead_id="${bead.id}", ...) for manual checkpoints`,
+          `Use hive_spawn_child(parent_bead_id="${bead.id}", ...) if complexity emerges`,
+          `Use hive_complete(bead_id="${bead.id}", ...) when done`,
+        ],
+        philosophy: "Even simple tasks deserve observability",
+      },
+      null,
+      2,
+    );
+  },
+});
+
+/**
+ * Create a child bead under a parent for emergent work
+ *
+ * Philosophy: "Complexity emerges - capture it"
+ *
+ * This tool enables self-organizing task structure. When working on a task,
+ * you may discover additional work that needs tracking. Rather than losing
+ * this insight, you can spawn a child bead to capture the emergent complexity.
+ *
+ * Key behaviors:
+ * - Creates child bead linked to parent
+ * - Logs discovery via hivemail to coordinator thread
+ * - Returns child_bead_id for independent tracking
+ * - Enables recursive decomposition without coordinator overhead
+ *
+ * Use this when:
+ * - You discover a subtask while working
+ * - A bug is found that needs separate tracking
+ * - The task naturally decomposes into parts
+ * - You want to parallelize by spawning work for other agents
+ *
+ * @example
+ * ```typescript
+ * // Working on a feature, discover a bug
+ * const child = await hive_spawn_child({
+ *   parent_bead_id: "bd-abc123",
+ *   title: "Fix null pointer in auth handler",
+ *   description: "Discovered while implementing login - auth.ts line 42",
+ *   type: "bug",
+ * });
+ *
+ * // Child is now tracked separately
+ * await hive_progress({ bead_id: child.child_bead_id, ... });
+ * ```
+ */
+export const hive_spawn_child = tool({
+  description: `Create a child bead under a parent for emergent work.
+
+Philosophy: "Complexity emerges - capture it"
+
+Use this when you discover subtasks, bugs, or additional work while executing a task. Creates a child bead, notifies the coordinator, and returns the child_bead_id for tracking.`,
+  args: {
+    parent_bead_id: tool.schema.string().describe("Parent bead ID to create child under"),
+    title: tool.schema.string().describe("Title of the child task"),
+    description: tool.schema
+      .string()
+      .optional()
+      .describe("Description of what needs to be done"),
+    files: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Files related to this child task"),
+    type: tool.schema
+      .enum(["task", "bug", "chore"])
+      .default("task")
+      .describe("Type of work (default: task)"),
+    priority: tool.schema
+      .number()
+      .min(0)
+      .max(3)
+      .optional()
+      .describe("Priority 0-3 (inherits from parent if not specified)"),
+    agent_name: tool.schema
+      .string()
+      .optional()
+      .describe("Agent name for tracking"),
+    project_key: tool.schema
+      .string()
+      .optional()
+      .describe("Project path (defaults to cwd)"),
+  },
+  async execute(args) {
+    const projectKey = args.project_key || process.cwd();
+    const agentName = args.agent_name || `spawner-${Date.now().toString(36)}`;
+
+    // Extract epic ID from parent (for thread notifications)
+    // e.g., "bd-abc123.1" -> "bd-abc123", or "bd-abc123" -> "bd-abc123"
+    const epicId = args.parent_bead_id.includes(".")
+      ? args.parent_bead_id.split(".")[0]
+      : args.parent_bead_id;
+
+    // Build description with context
+    const description = [
+      args.description || "",
+      "",
+      `Spawned from: ${args.parent_bead_id}`,
+      args.files && args.files.length > 0
+        ? `Files: ${args.files.join(", ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    // Create child bead using bd CLI
+    const createArgs = [
+      "create",
+      args.title,
+      "-t", args.type || "task",
+      "-p", String(args.priority ?? 2),
+      "-d", description,
+      "--parent", args.parent_bead_id,
+      "--json",
+    ];
+
+    const result = await runBdCommand(createArgs);
+
+    if (result.exitCode !== 0) {
+      return JSON.stringify(
+        {
+          success: false,
+          error: `Failed to create child bead: ${result.stderr}`,
+          hint: "Verify parent bead exists with 'bd show " + args.parent_bead_id + "'",
+        },
+        null,
+        2,
+      );
+    }
+
+    // Parse the created bead
+    const stdout = result.stdout.trim();
+    let childBead: { id: string; title: string; status: string; type: string };
+    try {
+      const parsed = JSON.parse(stdout);
+      childBead = Array.isArray(parsed) ? parsed[0] : parsed;
+    } catch (error) {
+      return JSON.stringify(
+        {
+          success: false,
+          error: `Failed to parse bead response: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        null,
+        2,
+      );
+    }
+
+    // Send discovery notification to coordinator thread
+    let notificationSent = false;
+    try {
+      const discoveryBody = `## Child Task Discovered
+
+**Parent**: ${args.parent_bead_id}
+**Child**: ${childBead.id}
+**Type**: ${args.type || "task"}
+**Title**: ${args.title}
+
+${args.description ? `**Description**: ${args.description}\n` : ""}
+${args.files && args.files.length > 0 ? `**Files**: ${args.files.map((f) => `\`${f}\``).join(", ")}\n` : ""}
+
+### Context
+
+This child was spawned during task execution, indicating emergent complexity.
+The agent discovered work that benefits from separate tracking.
+
+### Philosophy
+
+"Complexity emerges - capture it"
+
+Self-organizing task structure allows the hive to adapt without coordinator overhead.`;
+
+      await sendSwarmMessage({
+        projectPath: projectKey,
+        fromAgent: agentName,
+        toAgents: [], // Broadcast to thread
+        subject: `Discovery: ${childBead.id} spawned from ${args.parent_bead_id}`,
+        body: discoveryBody,
+        threadId: epicId,
+        importance: args.type === "bug" ? "high" : "normal",
+      });
+
+      notificationSent = true;
+    } catch (error) {
+      // Non-fatal - just log warning
+      console.warn(
+        `[hive_spawn_child] Failed to send discovery notification: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    // Store discovery pattern in semantic memory
+    let memoryStored = false;
+    try {
+      const storage = getStorage();
+      await storage.storePattern({
+        id: `discovery-${childBead.id}-${Date.now()}`,
+        content: `Child ${args.type || "task"} "${args.title}" discovered during ${args.parent_bead_id}. ${args.description || ""}`,
+        kind: "pattern", // Discoveries are positive patterns (emergent complexity is expected)
+        is_negative: false,
+        success_count: 0,
+        failure_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tags: ["emergent", "discovery", args.type || "task", ...(args.files || [])],
+        example_beads: [args.parent_bead_id, childBead.id],
+      });
+      memoryStored = true;
+    } catch (error) {
+      // Non-fatal - just log warning
+      console.warn(
+        `[hive_spawn_child] Failed to store discovery pattern: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    return JSON.stringify(
+      {
+        success: true,
+        child_bead_id: childBead.id,
+        parent_bead_id: args.parent_bead_id,
+        epic_id: epicId,
+        type: childBead.type,
+        title: args.title,
+        notification_sent: notificationSent,
+        memory_stored: memoryStored,
+        next_steps: [
+          `Use hive_progress(bead_id="${childBead.id}", ...) to track child progress`,
+          `Use hive_complete(bead_id="${childBead.id}", ...) when child is done`,
+          `Parent ${args.parent_bead_id} can continue independently`,
+        ],
+        philosophy: "Complexity emerges - capture it",
+      },
+      null,
+      2,
+    );
+  },
+});
+
+// ============================================================================
+// Spec-Aware Orchestration Tools
+// ============================================================================
+
+/**
+ * Generate specs for subtasks during orchestration
+ *
+ * This tool integrates spec generation into the hive orchestration flow.
+ * Call after decomposition to optionally create specs for complex subtasks.
+ *
+ * Spec generation is triggered when:
+ * - explicit_spec=true flag is passed
+ * - Task complexity >= 3
+ * - Task type is "feature" or "epic"
+ * - Subtask count > 5
+ *
+ * Auto-approval happens when:
+ * - Complexity == 3 AND no open questions
+ * - explicit auto_approve=true
+ *
+ * @example
+ * ```typescript
+ * // After decomposition
+ * const decomposition = await hive_decompose(...);
+ *
+ * // Generate specs for complex subtasks
+ * const specResult = await hive_generate_specs({
+ *   epic_title: "Add OAuth support",
+ *   subtasks: decomposition.subtasks,
+ *   task_type: "feature",
+ * });
+ * ```
+ */
+export const hive_generate_specs = tool({
+  description: `Generate specs for subtasks during orchestration. Integrates spec_quick_write with complexity-based triggers.
+
+Use after hive_decompose to create specs for complex subtasks. Specs are auto-approved when complexity=3 and no open questions exist.
+
+Triggers:
+- explicit_spec=true
+- complexity >= 3
+- task type is "feature" or "epic"
+- subtask count > 5`,
+  args: {
+    epic_title: tool.schema.string().describe("Title of the parent epic"),
+    subtasks: tool.schema
+      .array(
+        tool.schema.object({
+          title: tool.schema.string(),
+          description: tool.schema.string().optional(),
+          files: tool.schema.array(tool.schema.string()),
+          estimated_complexity: tool.schema.number().min(1).max(5),
+          dependencies: tool.schema.array(tool.schema.number()).optional(),
+        }),
+      )
+      .describe("Subtasks from decomposition"),
+    task_type: tool.schema
+      .enum(["feature", "epic", "task", "bug", "chore"])
+      .default("task")
+      .describe("Type of the parent task"),
+    explicit_spec: tool.schema
+      .boolean()
+      .optional()
+      .describe("Explicitly trigger spec generation for all subtasks"),
+    open_questions: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Open questions that prevent auto-approval"),
+    config: tool.schema
+      .object({
+        complexity_threshold: tool.schema.number().optional(),
+        auto_approve_complexity: tool.schema.number().optional(),
+        default_confidence: tool.schema.number().optional(),
+      })
+      .optional()
+      .describe("Override default spec generation config"),
+  },
+  async execute(args, ctx) {
+    // Check if spec generation is triggered at all
+    const triggerCheck = isSpecGenerationTriggered({
+      explicit_flag: args.explicit_spec,
+      task_type: args.task_type,
+      subtask_count: args.subtasks.length,
+      config: args.config,
+    });
+
+    if (!triggerCheck.triggered) {
+      return JSON.stringify(
+        {
+          success: true,
+          specs_generated: 0,
+          reason: triggerCheck.reason,
+          subtasks_analyzed: args.subtasks.length,
+          message: "No specs generated - triggers not met",
+        },
+        null,
+        2,
+      );
+    }
+
+    const hasOpenQuestions =
+      args.open_questions !== undefined && args.open_questions.length > 0;
+
+    const results: Array<{
+      subtask_title: string;
+      decision: SpecGenerationDecision;
+      spec_id?: string;
+      auto_approved?: boolean;
+      error?: string;
+    }> = [];
+
+    // Process each subtask
+    for (const subtask of args.subtasks) {
+      // Determine if this specific subtask should get a spec
+      const decision = shouldGenerateSpec(
+        subtask,
+        args.task_type,
+        hasOpenQuestions,
+        args.config,
+      );
+
+      if (decision.should_generate) {
+        // Generate the spec
+        const specResult = await generateSubtaskSpec(
+          subtask,
+          args.epic_title,
+          decision,
+          ctx,
+        );
+
+        results.push({
+          subtask_title: subtask.title,
+          decision,
+          spec_id: specResult.spec_id,
+          auto_approved: specResult.auto_approved,
+          error: specResult.error,
+        });
+      } else {
+        results.push({
+          subtask_title: subtask.title,
+          decision,
+        });
+      }
+    }
+
+    // Summarize results
+    const specsGenerated = results.filter((r) => r.spec_id).length;
+    const autoApproved = results.filter((r) => r.auto_approved).length;
+    const needsReview = specsGenerated - autoApproved;
+    const skipped = results.filter((r) => !r.decision.should_generate).length;
+
+    return JSON.stringify(
+      {
+        success: true,
+        trigger_reason: triggerCheck.reason,
+        specs_generated: specsGenerated,
+        auto_approved: autoApproved,
+        needs_review: needsReview,
+        skipped,
+        has_open_questions: hasOpenQuestions,
+        results: results.map((r) => ({
+          subtask: r.subtask_title,
+          generated: !!r.spec_id,
+          spec_id: r.spec_id,
+          auto_approved: r.auto_approved,
+          reasoning: r.decision.reasoning,
+          confidence: r.decision.confidence,
+          error: r.error,
+        })),
+        next_steps:
+          needsReview > 0
+            ? [
+                `${needsReview} spec(s) require human review`,
+                "Use spec_query(status='draft') to list pending specs",
+                "Use spec_submit() to submit specs for review",
+              ]
+            : specsGenerated > 0
+              ? [
+                  `${autoApproved} spec(s) auto-approved`,
+                  "Specs are ready for implementation",
+                  "Use spec_implement() when ready",
+                ]
+              : ["No specs generated for these subtasks"],
+      },
+      null,
+      2,
+    );
+  },
+});
+
+/**
+ * Check if a task should trigger spec generation
+ *
+ * Lightweight check to determine if specs should be generated without
+ * actually creating them. Use before decomposition to inform the planning.
+ */
+export const hive_check_spec_trigger = tool({
+  description: `Check if a task should trigger spec generation. Use before decomposition to inform planning.
+
+Returns trigger status without generating specs. Useful for understanding when spec_quick_write should be used.`,
+  args: {
+    task_description: tool.schema.string().describe("Task being analyzed"),
+    task_type: tool.schema
+      .enum(["feature", "epic", "task", "bug", "chore"])
+      .default("task")
+      .describe("Type of task"),
+    estimated_complexity: tool.schema
+      .number()
+      .min(1)
+      .max(5)
+      .optional()
+      .describe("Estimated complexity (1-5)"),
+    subtask_count: tool.schema
+      .number()
+      .optional()
+      .describe("Expected number of subtasks"),
+    explicit_spec: tool.schema
+      .boolean()
+      .optional()
+      .describe("Explicit spec generation flag"),
+  },
+  async execute(args) {
+    const triggerResult = isSpecGenerationTriggered({
+      explicit_flag: args.explicit_spec,
+      task_type: args.task_type,
+      task_complexity: args.estimated_complexity,
+      subtask_count: args.subtask_count,
+    });
+
+    // Provide guidance based on result
+    const guidance = triggerResult.triggered
+      ? {
+          recommendation: "Generate specs for complex subtasks",
+          when_to_auto_approve:
+            "complexity <= 3 AND no open questions AND high confidence",
+          tools_to_use: [
+            "spec_quick_write (with auto_approve=true for routine tasks)",
+            "hive_generate_specs (after decomposition)",
+          ],
+        }
+      : {
+          recommendation: "Spec generation not needed for this task",
+          override:
+            "Use explicit_spec=true to force spec generation if needed",
+        };
+
+    return JSON.stringify(
+      {
+        task_type: args.task_type,
+        estimated_complexity: args.estimated_complexity,
+        subtask_count: args.subtask_count,
+        explicit_spec: args.explicit_spec,
+        will_trigger: triggerResult.triggered,
+        reason: triggerResult.reason,
+        guidance,
+        config: DEFAULT_SPEC_CONFIG,
+      },
+      null,
+      2,
+    );
+  },
+});
+
+// ============================================================================
 // Export tools
 // ============================================================================
 
@@ -2088,4 +2881,8 @@ export const orchestrateTools = {
   hive_checkpoint,
   hive_recover,
   hive_learn,
+  hive_track_single,
+  hive_spawn_child,
+  hive_generate_specs,
+  hive_check_spec_trigger,
 };

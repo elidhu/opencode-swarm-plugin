@@ -26,33 +26,38 @@ import {
   SpecEntrySchema,
   type SpecEntry,
   type SpecChangeProposal,
+  type ApproverType,
 } from "./schemas/spec";
 import { beads_create, beads_update, beads_create_epic } from "./beads";
 import { hivemail_send } from "./hive-mail";
+import {
+  createDirectoryContext,
+  CONTEXT_NAMES,
+} from "./utils/directory-context";
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 /**
- * Module-level working directory for spec operations.
+ * Directory context for spec operations.
  * Set this via setSpecWorkingDirectory() before using tools.
  */
-let specWorkingDirectory: string | null = null;
+const specDirContext = createDirectoryContext(CONTEXT_NAMES.SPEC);
 
 /**
  * Set the working directory for all spec commands.
  * Call this from the plugin initialization with the project directory.
  */
 export function setSpecWorkingDirectory(directory: string): void {
-  specWorkingDirectory = directory;
+  specDirContext.set(directory);
 }
 
 /**
  * Get the current working directory for spec commands.
  */
 export function getSpecWorkingDirectory(): string {
-  return specWorkingDirectory || process.cwd();
+  return specDirContext.get();
 }
 
 // ============================================================================
@@ -399,6 +404,173 @@ Reply to this message with:
 File path: ${spec.file_path}
 Bead ID: ${spec.bead_id || "N/A"}
 `;
+}
+
+// ============================================================================
+// Core Approval Logic
+// ============================================================================
+
+/**
+ * Default confidence threshold for auto-approval.
+ * Specs with confidence >= this value will be auto-approved when using spec_quick_write.
+ */
+export const DEFAULT_AUTO_APPROVE_THRESHOLD = 0.8;
+
+/**
+ * Approve a specification programmatically.
+ *
+ * This is the core approval function that can be invoked by both CLI and programmatic callers.
+ * It handles all approval side effects: status change, timestamp, notifications, and bead updates.
+ *
+ * @param specId - The spec ID to approve
+ * @param approver - Who is approving: "human" | "system" | specific human identifier
+ * @param ctx - Tool execution context for calling other tools
+ * @returns The approved spec entry
+ * @throws SpecError if spec not found or not in a state that can be approved
+ */
+export async function approveSpec(
+  specId: string,
+  approver: ApproverType | string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+): Promise<SpecEntry> {
+  const spec = await loadSpec(specId);
+  if (!spec) {
+    throw new SpecError(`Spec not found: ${specId}`, "NOT_FOUND", { specId });
+  }
+
+  // Allow approval from draft (for auto-approve) or review (for human review)
+  if (spec.status !== "draft" && spec.status !== "review") {
+    throw new SpecError(
+      `Spec cannot be approved from status: ${spec.status}`,
+      "INVALID_STATUS",
+      { specId, currentStatus: spec.status },
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  // Update spec
+  spec.status = "approved";
+  spec.approved_at = now;
+  spec.approved_by = approver;
+  spec.updated_at = now;
+
+  // Update file path to approved location
+  spec.file_path = join(
+    getSpecWorkingDirectory(),
+    "openspec",
+    "specs",
+    spec.capability,
+    "spec.md",
+  );
+
+  // Write to new location and update storage
+  await writeSpecFile(spec);
+  await storeSpec(spec);
+
+  // Update bead status if linked
+  if (spec.bead_id) {
+    await beads_update.execute(
+      {
+        id: spec.bead_id,
+        status: "closed",
+        description: `Spec ${spec.id} approved by ${approver}`,
+      },
+      ctx,
+    );
+  }
+
+  return spec;
+}
+
+/**
+ * Auto-approve a specification (system approval).
+ *
+ * This is a convenience function that mirrors CLI approval but for programmatic use.
+ * It sets approved_by to "system" and sends a notification via hivemail.
+ *
+ * @param specId - The spec ID to auto-approve
+ * @param ctx - Tool execution context
+ * @returns The approved spec entry
+ */
+export async function autoApproveSpec(
+  specId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+): Promise<SpecEntry> {
+  const spec = await approveSpec(specId, "system", ctx);
+
+  // Send notification about auto-approval
+  await hivemail_send.execute(
+    {
+      to: ["coordinator", "human"],
+      subject: `[AUTO-APPROVED] ${spec.title}`,
+      body: formatAutoApprovalNotification(spec),
+      importance: "normal",
+    },
+    ctx,
+  );
+
+  return spec;
+}
+
+/**
+ * Format notification for auto-approved specs
+ */
+function formatAutoApprovalNotification(spec: SpecEntry): string {
+  return `# Specification Auto-Approved
+
+**Title**: ${spec.title}
+**Capability**: ${spec.capability}
+**Version**: ${spec.version}
+**Spec ID**: ${spec.id}
+
+## Purpose
+
+${spec.purpose}
+
+## Details
+
+- **Requirements**: ${spec.requirements.length} total
+- **Confidence**: ${spec.confidence !== undefined ? `${(spec.confidence * 100).toFixed(0)}%` : "N/A"}
+- **Approved At**: ${spec.approved_at}
+- **Approved By**: system (auto-approval)
+
+## Actions
+
+This spec was auto-approved based on confidence threshold or explicit auto_approve flag.
+If you need to revise, use spec_write() to create a new version.
+
+---
+
+File path: ${spec.file_path}
+Bead ID: ${spec.bead_id || "N/A"}
+`;
+}
+
+/**
+ * Check if a spec should be auto-approved based on confidence threshold
+ */
+function shouldAutoApprove(
+  autoApprove: boolean | undefined,
+  confidence: number | undefined,
+  threshold: number = DEFAULT_AUTO_APPROVE_THRESHOLD,
+): boolean {
+  // Explicit auto_approve flag takes precedence
+  if (autoApprove === true) {
+    return true;
+  }
+  if (autoApprove === false) {
+    return false;
+  }
+
+  // Fall back to confidence threshold
+  if (confidence !== undefined && confidence >= threshold) {
+    return true;
+  }
+
+  return false;
 }
 
 // ============================================================================
@@ -948,6 +1120,324 @@ export const spec_query = tool({
   },
 });
 
+/**
+ * spec_quick_write - Create specification with optional auto-approval
+ *
+ * Combines spec_write + automatic approval in one operation.
+ * If auto_approve=true OR confidence >= threshold (default 0.8), auto-approves immediately.
+ * Otherwise, behaves like spec_write (creates draft for later review).
+ */
+export const spec_quick_write = tool({
+  description:
+    "Create a specification with optional auto-approval. Combines spec_write + automatic approval in one operation. If auto_approve=true OR confidence >= threshold (default 0.8), auto-approves immediately. Otherwise, creates draft for later review.",
+  args: {
+    // Same args as spec_write
+    spec_id: tool.schema
+      .string()
+      .optional()
+      .describe("Existing spec ID to update, or omit to create new"),
+    capability: tool.schema
+      .string()
+      .regex(/^[a-z0-9-]+$/)
+      .describe("Capability slug (e.g., 'user-authentication')"),
+    title: tool.schema.string().describe("Human-readable title"),
+    purpose: tool.schema
+      .string()
+      .min(20)
+      .describe("Why this capability exists (min 20 chars)"),
+    requirements: tool.schema
+      .array(
+        tool.schema.object({
+          id: tool.schema.string().optional().describe("Requirement ID"),
+          name: tool.schema.string().max(50).describe("Short requirement name"),
+          type: tool.schema
+            .enum(["shall", "must", "should", "may"])
+            .describe("Normative language type"),
+          description: tool.schema.string().describe("Full description"),
+          scenarios: tool.schema
+            .array(
+              tool.schema.object({
+                name: tool.schema.string(),
+                given: tool.schema.string(),
+                when: tool.schema.string(),
+                then: tool.schema.array(tool.schema.string()),
+              }),
+            )
+            .describe("Test scenarios in Given-When-Then format"),
+          tags: tool.schema.array(tool.schema.string()).optional(),
+        }),
+      )
+      .describe("Structured requirements"),
+    nfr: tool.schema
+      .object({
+        performance: tool.schema.string().optional(),
+        security: tool.schema.string().optional(),
+        scalability: tool.schema.string().optional(),
+      })
+      .optional()
+      .describe("Non-functional requirements"),
+    open_questions: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Questions that need human clarification"),
+    discovery_id: tool.schema
+      .string()
+      .optional()
+      .describe("Discovery that spawned this spec"),
+    tags: tool.schema.array(tool.schema.string()).optional(),
+
+    // Auto-approval specific args
+    auto_approve: tool.schema
+      .boolean()
+      .optional()
+      .describe(
+        "If true, auto-approve the spec immediately (bypasses human review)",
+      ),
+    confidence: tool.schema
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        "Confidence score (0-1). If >= threshold (default 0.8), auto-approves",
+      ),
+    confidence_threshold: tool.schema
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        "Custom threshold for confidence-based auto-approval (default: 0.8)",
+      ),
+  },
+  async execute(args, ctx): Promise<string> {
+    try {
+      const now = new Date().toISOString();
+      const agentName = (ctx as { agentName?: string }).agentName || "agent";
+      const threshold = args.confidence_threshold ?? DEFAULT_AUTO_APPROVE_THRESHOLD;
+
+      // Determine if we should auto-approve
+      const willAutoApprove = shouldAutoApprove(
+        args.auto_approve,
+        args.confidence,
+        threshold,
+      );
+
+      // Check for open questions - cannot auto-approve with open questions
+      if (willAutoApprove && args.open_questions && args.open_questions.length > 0) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: "Cannot auto-approve spec with open questions",
+            open_questions: args.open_questions,
+            hint: "Either resolve open questions or set auto_approve=false",
+          },
+          null,
+          2,
+        );
+      }
+
+      // Check if updating existing spec
+      if (args.spec_id) {
+        // Update existing
+        const existing = await loadSpec(args.spec_id);
+        if (!existing) {
+          throw new SpecError(
+            `Spec not found: ${args.spec_id}`,
+            "NOT_FOUND",
+            { spec_id: args.spec_id },
+          );
+        }
+
+        // Update fields
+        const updated: SpecEntry = {
+          ...existing,
+          title: args.title,
+          purpose: args.purpose,
+          requirements: args.requirements.map((r, i) => ({
+            id: r.id || `req-${i + 1}`,
+            name: r.name,
+            type: r.type,
+            description: r.description,
+            scenarios: r.scenarios,
+            tags: r.tags || [],
+          })),
+          nfr: args.nfr,
+          open_questions: args.open_questions || [],
+          tags: args.tags || existing.tags,
+          updated_at: now,
+          auto_approve: args.auto_approve,
+          confidence: args.confidence,
+        };
+
+        await writeSpecFile(updated);
+        await storeSpec(updated);
+
+        // Auto-approve if conditions met
+        if (willAutoApprove) {
+          const approved = await autoApproveSpec(updated.id, ctx);
+          return JSON.stringify(
+            {
+              success: true,
+              mode: "update",
+              auto_approved: true,
+              spec_id: approved.id,
+              bead_id: approved.bead_id,
+              file_path: approved.file_path,
+              status: approved.status,
+              approved_by: approved.approved_by,
+              approved_at: approved.approved_at,
+              confidence: args.confidence,
+              threshold,
+            },
+            null,
+            2,
+          );
+        }
+
+        return JSON.stringify(
+          {
+            success: true,
+            mode: "update",
+            auto_approved: false,
+            spec_id: updated.id,
+            bead_id: updated.bead_id,
+            file_path: updated.file_path,
+            status: updated.status,
+            open_questions: updated.open_questions.length,
+            confidence: args.confidence,
+            threshold,
+            next_step:
+              updated.open_questions.length > 0
+                ? "Resolve open questions or await human clarification"
+                : "Run spec_submit() when ready for review",
+          },
+          null,
+          2,
+        );
+      } else {
+        // Create new spec
+        const version = 1;
+        const specId = generateSpecId(args.capability, version);
+
+        // Create bead for tracking
+        const beadResult = await beads_create.execute(
+          {
+            title: willAutoApprove
+              ? `[SPEC AUTO-APPROVED] ${args.title}`
+              : `[SPEC DRAFT] ${args.title}`,
+            type: "task",
+            description: `Specification for ${args.capability}`,
+          },
+          ctx,
+        );
+        const bead = JSON.parse(beadResult);
+
+        // Create spec entry
+        const spec: SpecEntry = {
+          id: specId,
+          capability: args.capability,
+          version,
+          status: "draft",
+          title: args.title,
+          purpose: args.purpose,
+          requirements: args.requirements.map((r, i) => ({
+            id: r.id || `req-${i + 1}`,
+            name: r.name,
+            type: r.type,
+            description: r.description,
+            scenarios: r.scenarios,
+            tags: r.tags || [],
+          })),
+          nfr: args.nfr,
+          dependencies: [],
+          bead_id: bead.id,
+          discovery_id: args.discovery_id,
+          author: agentName,
+          created_at: now,
+          updated_at: now,
+          open_questions: args.open_questions || [],
+          tags: args.tags || [],
+          file_path: "",
+          auto_approve: args.auto_approve,
+          confidence: args.confidence,
+        };
+
+        // Set file path after creating spec
+        spec.file_path = getSpecFilePath(spec);
+
+        // Write spec file and store in LanceDB
+        await writeSpecFile(spec);
+        await storeSpec(spec);
+
+        // Auto-approve if conditions met
+        if (willAutoApprove) {
+          const approved = await autoApproveSpec(specId, ctx);
+          return JSON.stringify(
+            {
+              success: true,
+              mode: "create",
+              auto_approved: true,
+              spec_id: approved.id,
+              bead_id: bead.id,
+              file_path: approved.file_path,
+              status: approved.status,
+              approved_by: approved.approved_by,
+              approved_at: approved.approved_at,
+              confidence: args.confidence,
+              threshold,
+            },
+            null,
+            2,
+          );
+        }
+
+        return JSON.stringify(
+          {
+            success: true,
+            mode: "create",
+            auto_approved: false,
+            spec_id: specId,
+            bead_id: bead.id,
+            file_path: spec.file_path,
+            status: "draft",
+            open_questions: spec.open_questions.length,
+            confidence: args.confidence,
+            threshold,
+            next_step:
+              spec.open_questions.length > 0
+                ? "Await human clarification on open questions"
+                : "Run spec_submit() when ready for review",
+          },
+          null,
+          2,
+        );
+      }
+    } catch (error) {
+      if (error instanceof SpecError) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: error.message,
+            code: error.code,
+            details: error.details,
+          },
+          null,
+          2,
+        );
+      }
+      return JSON.stringify(
+        {
+          success: false,
+          error: `Failed to write spec: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        null,
+        2,
+      );
+    }
+  },
+});
+
 // ============================================================================
 // Exports
 // ============================================================================
@@ -957,4 +1447,5 @@ export const specTools = {
   spec_submit,
   spec_implement,
   spec_query,
+  spec_quick_write,
 };
