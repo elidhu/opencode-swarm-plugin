@@ -17,7 +17,7 @@
  */
 
 import * as p from "@clack/prompts";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { cyan, dim, green, yellow, red } from "../branding.js";
 import {
@@ -59,39 +59,42 @@ interface SpecClarifyOptions {
   answer: string;
 }
 
+interface SpecReviewOptions {
+  verbose?: boolean;
+}
+
+interface SpecApproveAllOptions {
+  tag?: string;
+  since?: string;
+  confidence?: number;
+  dryRun?: boolean;
+  quiet?: boolean;
+}
+
+interface ReviewSummary {
+  approved: number;
+  rejected: number;
+  changesRequested: number;
+  skipped: number;
+  total: number;
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
 
 /**
- * Get all specs from the openspec directory
+ * Get all specs from the openspec directory.
+ * 
+ * Simplified structure:
+ * - openspec/specs/{capability}/spec.json - All specs live here regardless of status
+ * - Status is tracked in the JSON, not directory location
  */
 async function getAllSpecs(): Promise<SpecEntry[]> {
   const baseDir = getSpecWorkingDirectory();
   const specs: SpecEntry[] = [];
 
-  // Check drafts directory
-  const draftsDir = join(baseDir, "openspec", "drafts");
-  if (existsSync(draftsDir)) {
-    const draftDirs = readdirSync(draftsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-
-    for (const draftId of draftDirs) {
-      const jsonPath = join(draftsDir, draftId, "spec.json");
-      if (existsSync(jsonPath)) {
-        try {
-          const data = readFileSync(jsonPath, "utf-8");
-          const spec = SpecEntrySchema.parse(JSON.parse(data));
-          specs.push(spec);
-        } catch {
-          // Skip invalid specs
-        }
-      }
-    }
-  }
-
-  // Check specs directory (approved/implemented)
+  // Primary location: openspec/specs/{capability}/spec.json
   const specsDir = join(baseDir, "openspec", "specs");
   if (existsSync(specsDir)) {
     const capabilityDirs = readdirSync(specsDir, { withFileTypes: true })
@@ -112,7 +115,31 @@ async function getAllSpecs(): Promise<SpecEntry[]> {
     }
   }
 
-  // Check changes directory (review)
+  // Legacy support: Check drafts directory (migrate these to specs/)
+  const draftsDir = join(baseDir, "openspec", "drafts");
+  if (existsSync(draftsDir)) {
+    const draftDirs = readdirSync(draftsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    for (const draftId of draftDirs) {
+      const jsonPath = join(draftsDir, draftId, "spec.json");
+      if (existsSync(jsonPath)) {
+        try {
+          const data = readFileSync(jsonPath, "utf-8");
+          const spec = SpecEntrySchema.parse(JSON.parse(data));
+          // Only add if not already found in specs/
+          if (!specs.some(s => s.id === spec.id)) {
+            specs.push(spec);
+          }
+        } catch {
+          // Skip invalid specs
+        }
+      }
+    }
+  }
+
+  // Legacy support: Check changes directory (migrate these to specs/)
   const changesDir = join(baseDir, "openspec", "changes");
   if (existsSync(changesDir)) {
     const changeDirs = readdirSync(changesDir, { withFileTypes: true })
@@ -132,7 +159,10 @@ async function getAllSpecs(): Promise<SpecEntry[]> {
             try {
               const data = readFileSync(jsonPath, "utf-8");
               const spec = SpecEntrySchema.parse(JSON.parse(data));
-              specs.push(spec);
+              // Only add if not already found
+              if (!specs.some(s => s.id === spec.id)) {
+                specs.push(spec);
+              }
             } catch {
               // Skip invalid specs
             }
@@ -161,49 +191,83 @@ async function findSpecById(specId: string): Promise<SpecEntry | null> {
 }
 
 /**
- * Save spec JSON to appropriate location based on status
+ * Find all locations of a spec by ID (for cleanup of legacy locations)
+ */
+function findSpecLocations(specId: string, capability: string): string[] {
+  const baseDir = getSpecWorkingDirectory();
+  const locations: string[] = [];
+  
+  // Check primary location: specs/{capability}
+  const specsPath = join(baseDir, "openspec", "specs", capability, "spec.json");
+  if (existsSync(specsPath)) {
+    locations.push(dirname(specsPath));
+  }
+  
+  // Check legacy drafts directory
+  const draftPath = join(baseDir, "openspec", "drafts", specId, "spec.json");
+  if (existsSync(draftPath)) {
+    locations.push(dirname(draftPath));
+  }
+  
+  // Check legacy changes directory
+  const changesDir = join(baseDir, "openspec", "changes");
+  if (existsSync(changesDir)) {
+    const changeDirs = readdirSync(changesDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    for (const changeId of changeDirs) {
+      const testPath = join(changesDir, changeId, "specs", capability, "spec.json");
+      if (existsSync(testPath)) {
+        locations.push(dirname(testPath));
+      }
+    }
+  }
+  
+  return locations;
+}
+
+/**
+ * Save spec JSON to canonical location: openspec/specs/{capability}/
+ * 
+ * Simplified approach:
+ * - All specs live in specs/{capability}/ regardless of status
+ * - Status is tracked in the JSON file itself
+ * - Cleans up any legacy locations (drafts/, changes/)
  */
 async function saveSpec(spec: SpecEntry): Promise<void> {
   const baseDir = getSpecWorkingDirectory();
-  let jsonPath: string;
-
-  if (spec.status === "draft") {
-    jsonPath = join(baseDir, "openspec", "drafts", spec.id, "spec.json");
-  } else if (spec.status === "review") {
-    // Keep in current location for review
-    const changesDir = join(baseDir, "openspec", "changes");
-    if (existsSync(changesDir)) {
-      const changeDirs = readdirSync(changesDir, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name);
-
-      for (const changeId of changeDirs) {
-        const testPath = join(changesDir, changeId, "specs", spec.capability, "spec.json");
-        if (existsSync(testPath)) {
-          jsonPath = testPath;
-          break;
-        }
-      }
-    }
-    // Fallback to drafts location if not found
-    jsonPath = jsonPath! || join(baseDir, "openspec", "drafts", spec.id, "spec.json");
-  } else {
-    // Approved/implemented/deprecated go to specs directory
-    jsonPath = join(baseDir, "openspec", "specs", spec.capability, "spec.json");
-  }
-
+  
+  // Find all existing locations before saving
+  const existingLocations = findSpecLocations(spec.id, spec.capability);
+  
+  // Canonical location: openspec/specs/{capability}/
+  const newDir = join(baseDir, "openspec", "specs", spec.capability);
+  
   // Ensure directory exists
-  const dir = dirname(jsonPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  if (!existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
   }
+  
+  const jsonPath = join(newDir, "spec.json");
 
   // Write JSON
   writeFileSync(jsonPath, JSON.stringify(spec, null, 2), "utf-8");
 
-  // Also write markdown
-  spec.file_path = join(dir, "spec.md");
+  // Write markdown
+  spec.file_path = join(newDir, "spec.md");
   await writeSpecFile(spec);
+  
+  // Clean up any legacy locations that aren't the canonical location
+  for (const location of existingLocations) {
+    if (location !== newDir) {
+      try {
+        rmSync(location, { recursive: true, force: true });
+      } catch {
+        // Ignore errors deleting old location
+      }
+    }
+  }
 }
 
 /**
@@ -334,30 +398,22 @@ export async function specListCommand(options: SpecListOptions = {}): Promise<vo
     return;
   }
 
-  // Display specs
-  p.log.step(`Found ${filtered.length} specification(s):`);
+  // Display specs in compact table format
+  p.log.step(`Found ${filtered.length} specification(s):\n`);
 
   for (const spec of filtered) {
     const statusStr = formatStatus(spec.status);
     const reqCount = spec.requirements.length;
     const questionsCount = spec.open_questions?.length || 0;
+    const updated = new Date(spec.updated_at).toLocaleDateString();
 
-    console.log();
-    p.log.message(`${cyan(spec.id)}`);
-    p.log.message(`  Title: ${spec.title}`);
-    p.log.message(`  Status: ${statusStr}`);
-    p.log.message(`  Version: v${spec.version}`);
-    p.log.message(`  Requirements: ${reqCount}`);
-    if (questionsCount > 0) {
-      p.log.message(`  Open Questions: ${yellow(questionsCount.toString())}`);
-    }
-    if (spec.bead_id) {
-      p.log.message(`  Bead: ${dim(spec.bead_id)}`);
-    }
-    p.log.message(`  Author: ${spec.author}`);
-    p.log.message(`  Updated: ${dim(spec.updated_at)}`);
+    // Compact single-line format with details on second line
+    console.log(`  ${cyan(spec.id)}`);
+    console.log(`    ${spec.title} ${dim(`(${statusStr}, v${spec.version}, ${reqCount} reqs${questionsCount > 0 ? `, ${yellow(questionsCount + " questions")}` : ""}${spec.bead_id ? `, ${dim(spec.bead_id)}` : ""})`)}`);
+    console.log(`    ${dim(`by ${spec.author} • ${updated}`)}`);
   }
 
+  console.log();
   p.outro(`Total: ${filtered.length} spec(s)`);
 }
 
@@ -800,6 +856,412 @@ export async function specClarifyCommand(specId: string, options: SpecClarifyOpt
   }
 }
 
+/**
+ * Display a spec in formatted detail for review (compact format)
+ */
+function displaySpecForReview(spec: SpecEntry, index: number, total: number): void {
+  console.log();
+  console.log(dim("─".repeat(60)));
+  console.log(`  ${cyan(`[${index + 1}/${total}]`)} ${spec.title}`);
+  console.log(dim("─".repeat(60)));
+  
+  // Metadata in compact 2-column layout
+  const created = new Date(spec.created_at).toLocaleDateString();
+  const confidence = spec.confidence !== undefined ? `${spec.confidence}%` : "";
+  const tags = spec.tags?.length ? spec.tags.join(", ") : "";
+  
+  console.log(`  ${dim("ID:")} ${spec.id}  ${dim("Capability:")} ${spec.capability}  ${dim("Version:")} v${spec.version}`);
+  console.log(`  ${dim("Author:")} ${spec.author}  ${dim("Status:")} ${formatStatus(spec.status)}  ${dim("Created:")} ${created}${confidence ? `  ${dim("Confidence:")} ${confidence}` : ""}`);
+  if (tags) console.log(`  ${dim("Tags:")} ${tags}`);
+  
+  // Purpose (single line if short, wrapped if long)
+  console.log();
+  console.log(`  ${dim("Purpose:")} ${spec.purpose.length <= 80 ? spec.purpose : ""}`);
+  if (spec.purpose.length > 80) {
+    console.log(`    ${spec.purpose}`);
+  }
+  
+  // Requirements (compact list)
+  console.log();
+  console.log(`  ${dim("Requirements:")} (${spec.requirements.length})`);
+  for (const req of spec.requirements.slice(0, 5)) {
+    console.log(`    • ${req.description.slice(0, 70)}${req.description.length > 70 ? "..." : ""}`);
+  }
+  if (spec.requirements.length > 5) {
+    console.log(dim(`    ... and ${spec.requirements.length - 5} more`));
+  }
+  
+  // Open questions (if any)
+  if (spec.open_questions && spec.open_questions.length > 0) {
+    console.log();
+    console.log(`  ${yellow("Open Questions:")} (${spec.open_questions.length})`);
+    for (const q of spec.open_questions) {
+      console.log(`    ${yellow("?")} ${q}`);
+    }
+  }
+  
+  console.log();
+}
+
+/**
+ * Interactive review of specs one-by-one
+ */
+export async function specReviewCommand(options: SpecReviewOptions = {}): Promise<void> {
+  p.intro(cyan("hive spec review"));
+  
+  setSpecWorkingDirectory(process.cwd());
+  
+  const s = p.spinner();
+  s.start("Loading specs pending review...");
+  
+  const allSpecs = await getAllSpecs();
+  const reviewSpecs = allSpecs.filter((spec) => spec.status === "review");
+  
+  s.stop(`Found ${reviewSpecs.length} spec(s) pending review`);
+  
+  if (reviewSpecs.length === 0) {
+    p.log.info("No specs pending review");
+    p.outro("All caught up!");
+    return;
+  }
+  
+  // Sort by created date (oldest first)
+  reviewSpecs.sort((a, b) => 
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  
+  const summary: ReviewSummary = {
+    approved: 0,
+    rejected: 0,
+    changesRequested: 0,
+    skipped: 0,
+    total: reviewSpecs.length,
+  };
+  
+  console.log();
+  p.log.step(`Starting interactive review of ${reviewSpecs.length} spec(s)`);
+  p.log.message(dim("Actions: [a]pprove  [r]eject  [c]hanges  [s]kip  [q]uit"));
+  
+  for (let i = 0; i < reviewSpecs.length; i++) {
+    const spec = reviewSpecs[i];
+    
+    displaySpecForReview(spec, i, reviewSpecs.length);
+    
+    const action = await p.select({
+      message: "What would you like to do?",
+      options: [
+        { value: "approve", label: "[a] Approve", hint: "Approve this spec for implementation" },
+        { value: "reject", label: "[r] Reject", hint: "Reject this spec (requires reason)" },
+        { value: "changes", label: "[c] Request Changes", hint: "Request changes (requires feedback)" },
+        { value: "skip", label: "[s] Skip", hint: "Skip and move to next spec" },
+        { value: "quit", label: "[q] Quit", hint: "Exit review session" },
+      ],
+    });
+    
+    if (p.isCancel(action) || action === "quit") {
+      p.log.warn("Review session ended early");
+      break;
+    }
+    
+    if (action === "skip") {
+      summary.skipped++;
+      p.log.info(`Skipped ${spec.id}`);
+      continue;
+    }
+    
+    if (action === "approve") {
+      const comment = await p.text({
+        message: "Optional approval comment:",
+        placeholder: "Press enter to skip",
+      });
+      
+      if (p.isCancel(comment)) continue;
+      
+      const s2 = p.spinner();
+      s2.start("Approving...");
+      
+      try {
+        spec.status = "approved";
+        spec.approved_at = new Date().toISOString();
+        spec.approved_by = process.env.USER || "human";
+        spec.updated_at = new Date().toISOString();
+        await saveSpec(spec);
+        
+        if (spec.bead_id) {
+          try {
+            await updateBeadStatus(spec.bead_id, "open", "Spec approved. Ready for implementation.");
+          } catch { /* ignore bead errors */ }
+        }
+        
+        try {
+          await notifyAgent(
+            spec.author,
+            `[APPROVED] Spec: ${spec.title}`,
+            `Your specification has been approved!\n\n` +
+              `**Spec ID**: ${spec.id}\n` +
+              `**Comment**: ${comment || "No additional comments"}\n\n` +
+              `Next step: Run spec_implement() to create implementation beads.`,
+            "high",
+            false,
+          );
+        } catch { /* ignore mail errors */ }
+        
+        s2.stop(green("✓") + ` Approved ${spec.id}`);
+        summary.approved++;
+      } catch (error) {
+        s2.stop(red("✗") + " Failed to approve");
+        p.log.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      continue;
+    }
+    
+    if (action === "reject") {
+      const reason = await p.text({
+        message: "Rejection reason (required):",
+        validate: (value) => {
+          if (!value || value.trim().length === 0) {
+            return "Reason is required";
+          }
+        },
+      });
+      
+      if (p.isCancel(reason) || !reason) continue;
+      
+      const s2 = p.spinner();
+      s2.start("Rejecting...");
+      
+      try {
+        spec.status = "deprecated";
+        spec.updated_at = new Date().toISOString();
+        await saveSpec(spec);
+        
+        if (spec.bead_id) {
+          try {
+            await closeBead(spec.bead_id, `Spec rejected: ${reason}`);
+          } catch { /* ignore bead errors */ }
+        }
+        
+        try {
+          await notifyAgent(
+            spec.author,
+            `[REJECTED] Spec: ${spec.title}`,
+            `The specification has been rejected.\n\n` +
+              `**Spec ID**: ${spec.id}\n` +
+              `**Reason**: ${reason}`,
+            "normal",
+            false,
+          );
+        } catch { /* ignore mail errors */ }
+        
+        s2.stop(red("✓") + ` Rejected ${spec.id}`);
+        summary.rejected++;
+      } catch (error) {
+        s2.stop(red("✗") + " Failed to reject");
+        p.log.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      continue;
+    }
+    
+    if (action === "changes") {
+      const feedback = await p.text({
+        message: "What changes are needed? (required):",
+        validate: (value) => {
+          if (!value || value.trim().length === 0) {
+            return "Feedback is required";
+          }
+        },
+      });
+      
+      if (p.isCancel(feedback) || !feedback) continue;
+      
+      const s2 = p.spinner();
+      s2.start("Requesting changes...");
+      
+      try {
+        await notifyAgent(
+          spec.author,
+          `[CHANGES REQUESTED] Spec: ${spec.title}`,
+          `Please update the specification based on the following feedback:\n\n` +
+            `**Spec ID**: ${spec.id}\n` +
+            `**Feedback**: ${feedback}\n\n` +
+            `Use spec_write() to update the spec and address the feedback.`,
+          "high",
+          true,
+        );
+        
+        s2.stop(yellow("✓") + ` Requested changes on ${spec.id}`);
+        summary.changesRequested++;
+      } catch (error) {
+        s2.stop(red("✗") + " Failed to send");
+        p.log.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      continue;
+    }
+  }
+  
+  // Show summary (compact format)
+  console.log();
+  console.log(dim("─".repeat(60)));
+  console.log(`  Review Summary: ${green(summary.approved + " approved")}  ${red(summary.rejected + " rejected")}  ${yellow(summary.changesRequested + " changes")}  ${dim(summary.skipped + " skipped")}`);
+  console.log(dim("─".repeat(60)));
+  
+  const processed = summary.approved + summary.rejected + summary.changesRequested;
+  const remaining = summary.total - processed - summary.skipped;
+  
+  if (remaining > 0) {
+    p.outro(`${processed} processed, ${remaining} remaining`);
+  } else {
+    p.outro(`All ${summary.total} specs reviewed`);
+  }
+}
+
+/**
+ * Batch approve specs with filters
+ */
+export async function specApproveAllCommand(options: SpecApproveAllOptions = {}): Promise<void> {
+  p.intro(cyan("hive spec approve-all"));
+  
+  setSpecWorkingDirectory(process.cwd());
+  
+  const s = p.spinner();
+  s.start("Loading specs pending review...");
+  
+  const allSpecs = await getAllSpecs();
+  let reviewSpecs = allSpecs.filter((spec) => spec.status === "review");
+  
+  // Apply filters
+  if (options.tag) {
+    reviewSpecs = reviewSpecs.filter((spec) => 
+      spec.tags && spec.tags.some((t) => t.toLowerCase() === options.tag!.toLowerCase())
+    );
+  }
+  
+  if (options.since) {
+    const sinceDate = new Date(options.since);
+    if (isNaN(sinceDate.getTime())) {
+      s.stop("Invalid date format");
+      p.log.error(`Invalid date: ${options.since}`);
+      p.outro("Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss");
+      process.exit(1);
+    }
+    reviewSpecs = reviewSpecs.filter((spec) => 
+      new Date(spec.created_at) >= sinceDate
+    );
+  }
+  
+  if (options.confidence !== undefined) {
+    reviewSpecs = reviewSpecs.filter((spec) => 
+      spec.confidence !== undefined && spec.confidence >= options.confidence!
+    );
+  }
+  
+  s.stop(`Found ${reviewSpecs.length} spec(s) matching filters`);
+  
+  if (reviewSpecs.length === 0) {
+    p.log.info("No specs match the specified filters");
+    
+    // Show filter info
+    if (options.tag) p.log.message(dim(`  --tag: ${options.tag}`));
+    if (options.since) p.log.message(dim(`  --since: ${options.since}`));
+    if (options.confidence !== undefined) p.log.message(dim(`  --confidence: >= ${options.confidence}`));
+    
+    p.outro("Try different filters or use 'hive spec list --status review' to see all");
+    return;
+  }
+  
+  // Show what will be approved
+  if (!options.quiet) {
+    p.log.step(`Specs to be approved (${reviewSpecs.length}):`);
+    for (const spec of reviewSpecs) {
+      const confidence = spec.confidence !== undefined ? ` (${spec.confidence}%)` : "";
+      p.log.message(`  • ${cyan(spec.id)}: ${spec.title}${confidence}`);
+    }
+    console.log();
+  }
+  
+  // Dry run mode
+  if (options.dryRun) {
+    p.log.info("Dry run - no changes made");
+    p.outro(`Would approve ${reviewSpecs.length} spec(s)`);
+    return;
+  }
+  
+  // Require confirmation
+  const confirm = await p.confirm({
+    message: `Approve all ${reviewSpecs.length} spec(s)?`,
+    initialValue: false,
+  });
+  
+  if (p.isCancel(confirm) || !confirm) {
+    p.outro("Batch approval cancelled");
+    return;
+  }
+  
+  // Process approvals
+  const s2 = p.spinner();
+  let approved = 0;
+  let failed = 0;
+  
+  for (let i = 0; i < reviewSpecs.length; i++) {
+    const spec = reviewSpecs[i];
+    s2.start(`Approving ${i + 1}/${reviewSpecs.length}: ${spec.id}...`);
+    
+    try {
+      spec.status = "approved";
+      spec.approved_at = new Date().toISOString();
+      spec.approved_by = process.env.USER || "human";
+      spec.updated_at = new Date().toISOString();
+      await saveSpec(spec);
+      
+      if (spec.bead_id) {
+        try {
+          await updateBeadStatus(spec.bead_id, "open", "Spec approved (batch). Ready for implementation.");
+        } catch { /* ignore bead errors */ }
+      }
+      
+      try {
+        await notifyAgent(
+          spec.author,
+          `[APPROVED] Spec: ${spec.title}`,
+          `Your specification has been approved (batch approval).\n\n` +
+            `**Spec ID**: ${spec.id}\n\n` +
+            `Next step: Run spec_implement() to create implementation beads.`,
+          "normal",
+          false,
+        );
+      } catch { /* ignore mail errors */ }
+      
+      approved++;
+      if (!options.quiet) {
+        s2.stop(green("✓") + ` Approved ${spec.id}`);
+        if (i < reviewSpecs.length - 1) {
+          s2.start(`Processing...`);
+        }
+      }
+    } catch (error) {
+      failed++;
+      if (!options.quiet) {
+        s2.stop(red("✗") + ` Failed: ${spec.id}`);
+        p.log.error(`  ${error instanceof Error ? error.message : String(error)}`);
+        if (i < reviewSpecs.length - 1) {
+          s2.start(`Processing...`);
+        }
+      }
+    }
+  }
+  
+  s2.stop("Done");
+  
+  // Summary
+  console.log();
+  p.log.success(`Approved: ${approved}`);
+  if (failed > 0) {
+    p.log.error(`Failed: ${failed}`);
+  }
+  
+  p.outro(`Batch approval complete`);
+}
+
 // ============================================================================
 // Main CLI Entry Point
 // ============================================================================
@@ -945,6 +1407,42 @@ export async function main(args: string[] = []): Promise<void> {
       break;
     }
 
+    case "review": {
+      const options: SpecReviewOptions = {};
+      for (let i = 0; i < subArgs.length; i++) {
+        const arg = subArgs[i];
+        if (arg === "--verbose" || arg === "-v") {
+          options.verbose = true;
+        }
+      }
+      await specReviewCommand(options);
+      break;
+    }
+
+    case "approve-all": {
+      const options: SpecApproveAllOptions = {};
+      for (let i = 0; i < subArgs.length; i++) {
+        const arg = subArgs[i];
+        if (arg === "--tag" || arg === "-t") {
+          options.tag = subArgs[++i];
+        } else if (arg === "--since") {
+          options.since = subArgs[++i];
+        } else if (arg === "--confidence") {
+          options.confidence = parseInt(subArgs[++i], 10);
+          if (isNaN(options.confidence) || options.confidence < 0 || options.confidence > 100) {
+            console.error("Confidence must be a number between 0 and 100");
+            process.exit(1);
+          }
+        } else if (arg === "--dry-run") {
+          options.dryRun = true;
+        } else if (arg === "--quiet" || arg === "-q") {
+          options.quiet = true;
+        }
+      }
+      await specApproveAllCommand(options);
+      break;
+    }
+
     default:
       console.error(`Unknown subcommand: ${subcommand}`);
       printHelp();
@@ -963,8 +1461,18 @@ Commands:
     --status, -s <status>       Filter by status (draft|review|approved|implemented|deprecated)
     --limit, -l <n>             Maximum specs to show
 
+  review                        Interactive review of pending specs
+    --verbose, -v               Show additional details
+
   approve <spec-id>             Approve a specification
     --comment, -c <comment>     Optional approval comment
+
+  approve-all                   Batch approve specs with filters
+    --tag, -t <tag>             Only specs with this tag
+    --since <date>              Only specs created after date (ISO format)
+    --confidence <n>            Only specs with confidence >= n (0-100)
+    --dry-run                   Show what would be approved without doing it
+    --quiet, -q                 Minimal output
 
   request-changes <spec-id>     Request changes on a spec
     --comment, -c <comment>     Required feedback (what needs to change)
@@ -982,7 +1490,10 @@ Commands:
 
 Examples:
   hive spec list --status review
+  hive spec review
   hive spec approve spec-user-auth-v1 --comment "Looks good"
+  hive spec approve-all --confidence 80 --dry-run
+  hive spec approve-all --tag mvp --since 2024-01-01
   hive spec request-changes spec-user-auth-v1 --comment "Need password reset scenario"
   hive spec reject spec-user-auth-v1 --reason "Out of scope for MVP"
   hive spec search "authentication"

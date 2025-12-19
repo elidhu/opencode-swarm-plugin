@@ -1,13 +1,15 @@
 ---
 name: hive-coordination
-description: Multi-agent coordination patterns for OpenCode swarm workflows. Use when working on complex tasks that benefit from parallelization, when coordinating multiple agents, or when managing task decomposition. Do NOT use for simple single-agent tasks.
+description: Multi-agent coordination patterns for OpenCode hive workflows. Use when working on complex tasks that benefit from parallelization, when coordinating multiple agents, or when managing task decomposition. Do NOT use for simple single-agent tasks.
 tags:
-  - swarm
+  - hive
   - multi-agent
   - coordination
 tools:
   - hive_decompose
   - hive_complete
+  - hive_track_single
+  - hive_spawn_child
   - hivemail_init
   - hivemail_send
   - hivemail_inbox
@@ -22,36 +24,105 @@ related_skills:
   - cli-builder
 ---
 
-# Swarm Coordination Skill
+# Hive Coordination Skill
 
-This skill provides guidance for effective multi-agent coordination in OpenCode swarm workflows.
+This skill provides guidance for effective multi-agent coordination in OpenCode hive workflows.
 
 **IMPORTANT:** This skill references global skills in `global-skills/`. Workers should load domain-specific skills based on their subtask type.
 
-## MANDATORY: Swarm Mail
+## MANDATORY: Hive Mail
 
 **ALL coordination MUST use `hivemail_*` tools.** This is non-negotiable.
 
-Swarm Mail is embedded (no external server needed) and provides:
+Hive Mail is embedded (no external server needed) and provides:
 
 - File reservations to prevent conflicts
 - Message passing between agents
 - Thread-based coordination tied to beads
 
-## When to Use Swarm Coordination
+## When to Use Hive Coordination
 
-Use swarm coordination when:
+Use hive coordination when:
 
 - A task has multiple independent subtasks that can run in parallel
 - The task requires different specializations (e.g., frontend + backend + tests)
 - Work can be divided by file/module boundaries
 - Time-to-completion matters and parallelization helps
 
-Do NOT use swarm coordination when:
+Do NOT use hive coordination when:
 
 - The task is simple and can be done by one agent
 - Subtasks have heavy dependencies on each other
 - The overhead of coordination exceeds the benefit
+
+## Single-Task Workflow
+
+For tasks that don't need full hive decomposition but still benefit from structured tracking:
+
+### When to Use Single-Task
+
+| Scenario                        | Tool                |
+| ------------------------------- | ------------------- |
+| Task touches 1-2 files          | `hive_track_single` |
+| Uncertain scope, needs discovery| `hive_track_single` → `hive_spawn_child` |
+| Sequential dependencies         | `hive_track_single` |
+| Quick fix or chore              | `hive_track_single` |
+
+### hive_track_single
+
+Create a tracking bead for single-agent work:
+
+```typescript
+const result = await hive_track_single({
+  task: "Fix auth token refresh bug",
+  files: ["src/auth/token.ts"],
+  type: "bug"
+});
+// Returns: { bead_id: "single-abc123", tracking_initialized: true }
+```
+
+### hive_spawn_child
+
+Create child beads for emergent work discovered during execution:
+
+```typescript
+// During work, discover need for related task
+await hive_spawn_child({
+  parent_id: "single-abc123",
+  title: "Add token refresh tests",
+  description: "Discovered missing test coverage",
+  files: ["src/auth/__tests__/refresh.test.ts"],
+  type: "task"
+});
+// Returns: { bead_id: "single-abc123.1", parent_id: "single-abc123" }
+```
+
+### Single-Task Pattern
+
+```typescript
+// 1. Initialize tracking
+const { bead_id } = await hive_track_single({
+  task: "Implement cache invalidation",
+  files: ["src/cache/invalidation.ts"]
+});
+
+// 2. Do the work...
+
+// 3. Discover additional scope
+await hive_spawn_child({
+  parent_id: bead_id,
+  title: "Add cache metrics",
+  description: "Need observability for cache hits/misses"
+});
+
+// 4. Complete parent (children tracked separately)
+await hive_complete({
+  project_key: "$PWD",
+  agent_name: "worker",
+  bead_id: bead_id,
+  summary: "Implemented cache invalidation"
+});
+```
 
 ## Task Decomposition Strategy
 
@@ -245,12 +316,12 @@ hive_checkpoint({
 
 ## Best Practices
 
-1. **Initialize Swarm Mail first** - Always call `hivemail_init` before any work
+1. **Initialize Hive Mail first** - Always call `hivemail_init` before any work
 2. **Check for recovery** - Use `hive_recover` at startup to resume crashed tasks
 3. **Small, focused subtasks** - Each subtask should be completable in one agent session
 4. **Clear boundaries** - Define exactly what files/modules each subtask touches
 5. **Explicit handoffs** - When one task enables another, communicate clearly
-6. **Graceful failures** - If a subtask fails, don't block the whole swarm
+6. **Graceful failures** - If a subtask fails, don't block the whole hive
 7. **Progress updates** - Use `hive_progress` for tracking (auto-checkpoints at milestones)
 8. **Share discoveries** - Use directives in `hive_checkpoint` to help other agents
 9. **Load relevant skills** - Workers should call `skills_use()` based on their task type:
@@ -314,7 +385,7 @@ decomposition:
 
 **For Coordinators:**
 
-1. Initialize Swarm Mail with `hivemail_init`
+1. Initialize Hive Mail with `hivemail_init`
 2. Load `hive-coordination` skill
 3. Analyze task type
 4. Load additional skills based on domain (testing, design, CLI)
@@ -322,7 +393,7 @@ decomposition:
 
 **For Workers:**
 
-1. Initialize Swarm Mail with `hivemail_init`
+1. Initialize Hive Mail with `hivemail_init`
 2. Read `shared_context` from coordinator
 3. Load recommended skills with `skills_use(name="skill-name")`
 4. Apply skill knowledge to subtask
@@ -347,7 +418,7 @@ Project learnings: [semantic-memory results]
 [Domain knowledge from coordinator]
 ```
 
-## Swarm Mail Quick Reference
+## Hive Mail Quick Reference
 
 | Tool                     | Purpose                             |
 | ------------------------ | ----------------------------------- |

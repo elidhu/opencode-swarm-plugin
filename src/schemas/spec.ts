@@ -27,6 +27,15 @@ export const SpecStatusSchema = z.enum([
 export type SpecStatus = z.infer<typeof SpecStatusSchema>;
 
 /**
+ * Approver type - tracks who approved a specification
+ *
+ * - human: Manually approved by a human reviewer
+ * - system: Auto-approved by the system (via spec_quick_write or autoApproveSpec)
+ */
+export const ApproverTypeSchema = z.enum(["human", "system"]);
+export type ApproverType = z.infer<typeof ApproverTypeSchema>;
+
+/**
  * Requirement type (normative language)
  *
  * Based on RFC 2119 terminology:
@@ -138,8 +147,14 @@ export const SpecEntrySchema = z.object({
   updated_at: RequiredTimestampSchema,
   approved_at: RequiredTimestampSchema.optional(),
 
-  /** Human reviewer (for approved specs) */
-  approved_by: z.string().optional(),
+  /** Who approved this spec (human or system) */
+  approved_by: z.union([ApproverTypeSchema, z.string()]).optional(),
+
+  /** Auto-approval flag - if true, spec can be auto-approved without human review */
+  auto_approve: z.boolean().optional(),
+
+  /** Confidence score (0-1) for auto-approval threshold decisions */
+  confidence: z.number().min(0).max(1).optional(),
 
   /** Open questions (cleared on approval) */
   open_questions: z.array(z.string()).default([]),
@@ -226,6 +241,7 @@ export type SpecChangeProposal = z.infer<typeof SpecChangeProposalSchema>;
 
 export const specSchemas = {
   SpecStatusSchema,
+  ApproverTypeSchema,
   RequirementTypeSchema,
   SpecScenarioSchema,
   SpecRequirementSchema,

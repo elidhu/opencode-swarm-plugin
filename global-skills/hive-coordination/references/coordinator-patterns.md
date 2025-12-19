@@ -92,7 +92,7 @@ for (const subtask of subtasks) {
 
   // 4. Spawn worker
   await Task({
-    subagent_type: "swarm/worker",
+    subagent_type: "hive-worker",
     prompt: prompt.worker_prompt,
   });
 }
@@ -284,6 +284,199 @@ Worker A completes → Checkpoint with directives → Coordinator → Worker B (
 - Task requires tight feedback loop
 
 **Heuristic:** If you can describe the task in one sentence without "and", probably single agent.
+
+---
+
+## Single-Task Patterns
+
+For tasks that don't warrant full hive decomposition, the coordinator should recommend single-task tools.
+
+### When Coordinator Should Recommend hive_track_single
+
+| Signal                                    | Recommendation           |
+| ----------------------------------------- | ------------------------ |
+| Task mentions 1-2 specific files          | `hive_track_single`      |
+| User says "quick fix" or "small change"   | `hive_track_single`      |
+| Task is exploratory/investigative         | `hive_track_single`      |
+| Sequential dependencies dominate          | `hive_track_single`      |
+| Time estimate < 30 minutes                | `hive_track_single`      |
+| User explicitly says "don't parallelize"  | `hive_track_single`      |
+
+**Pattern: Coordinator Triage**
+
+```typescript
+function triageTask(task: string, fileCount: number): "swarm" | "single" {
+  // Strong signals for single-task
+  if (fileCount <= 2) return "single";
+  if (task.includes("fix") && task.includes("bug")) return "single";
+  if (task.includes("investigate") || task.includes("explore")) return "single";
+  
+  // Strong signals for swarm
+  if (fileCount >= 5) return "swarm";
+  if (task.includes("and") && task.includes("and")) return "swarm";
+  if (task.includes("refactor") && task.includes("all")) return "swarm";
+  
+  // Default: lean toward single for simplicity
+  return "single";
+}
+```
+
+### Using hive_track_single
+
+**Coordinator hands off to single agent:**
+
+```typescript
+// Coordinator decides task is single-agent suitable
+const response = `
+This task is better suited for single-agent work. Use:
+
+\`\`\`bash
+hive_track_single(
+  task="${task}",
+  files=${JSON.stringify(files)},
+  type="${type}"
+)
+\`\`\`
+
+Then complete your work and call hive_complete when done.
+`;
+```
+
+### Using hive_spawn_child for Emergent Work
+
+When a single-agent discovers additional scope during execution:
+
+**Worker pattern:**
+
+```typescript
+// 1. Original task tracked
+const { bead_id } = await hive_track_single({
+  task: "Fix auth token refresh",
+  files: ["src/auth/token.ts"],
+  type: "bug"
+});
+
+// 2. During work, discover need for tests
+await hive_spawn_child({
+  parent_id: bead_id,
+  title: "Add token refresh tests",
+  description: "Discovered missing test coverage while fixing bug",
+  files: ["src/auth/__tests__/refresh.test.ts"],
+  type: "task"
+});
+
+// 3. Can optionally discover more children
+await hive_spawn_child({
+  parent_id: bead_id,
+  title: "Update auth docs",
+  description: "Token refresh behavior changed",
+  files: ["docs/auth.md"],
+  type: "chore"
+});
+
+// 4. Complete parent when done
+await hive_complete({
+  project_key: projectPath,
+  agent_name: "worker",
+  bead_id: bead_id,
+  summary: "Fixed token refresh, spawned 2 follow-up tasks"
+});
+```
+
+### Recovery Patterns for Single-Task
+
+**Scenario:** Single-task agent crashes mid-work.
+
+**Coordinator response:**
+
+```typescript
+// 1. Check if bead exists and has checkpoint
+const recovery = await hive_recover({
+  project_key: projectPath,
+  bead_id: singleBeadId, // e.g., "single-abc123"
+});
+
+if (!recovery.fresh_start && recovery.context) {
+  // 2. Inform new agent about recovery context
+  const recoveryContext = `
+## RECOVERY MODE
+
+Previous agent worked on this single-task bead:
+- Progress: ${recovery.context.progress_percent}%
+- Files touched: ${recovery.context.files_touched?.join(', ') || 'none'}
+
+${recovery.context.directives?.length > 0 ? `
+**Notes from previous agent:**
+${recovery.context.directives.map(d => `- ${d}`).join('\n')}
+` : ''}
+
+Continue from where they left off.
+`;
+
+  // 3. Re-spawn with recovery context
+  // (single-task doesn't need hive_track_single again - bead exists)
+}
+```
+
+**Pattern: Child Bead Recovery**
+
+If parent agent crashes after spawning children:
+
+```typescript
+// Query for orphaned children
+const orphanedChildren = await beads_query({
+  status: "open",
+  // Filter by parent_id pattern if needed
+});
+
+// Close parent as partial, let children be handled separately
+await beads_update({
+  id: parentBeadId,
+  status: "blocked",
+  description: "Parent crashed. Children may need coordinator attention."
+});
+```
+
+### Escalation: Single to Swarm
+
+Sometimes single-task work reveals need for swarm:
+
+```typescript
+// Worker discovers task is bigger than expected
+if (discoveredFiles.length > 4 || childBeads.length > 3) {
+  // Option 1: Escalate to coordinator
+  await hivemail_send({
+    to: ["coordinator"],
+    subject: "ESCALATION: Task needs hive decomposition",
+    body: `Original task was tracked as single-task but scope expanded:
+- Files now: ${discoveredFiles.length}
+- Child beads spawned: ${childBeads.length}
+
+Recommend converting to full hive with parallel workers.`,
+    importance: "high"
+  });
+  
+  // Option 2: Self-organize with children
+  // Continue spawning focused children, complete parent as "coordinator"
+}
+```
+
+### Anti-Patterns for Single-Task
+
+**The Fake Single-Task:**
+- Using `hive_track_single` for a 10-file refactor
+- Symptom: Agent runs for 2+ hours, hits context limits
+- Fix: If scope > 3 files, use hive decomposition
+
+**The Child Explosion:**
+- Spawning 10+ children from a single parent
+- Symptom: Orphaned children, no coordination
+- Fix: If > 3 children, convert to proper swarm with coordinator
+
+**The Silent Single:**
+- No checkpoints, no progress reporting
+- Symptom: Can't recover if agent crashes
+- Fix: Use `hive_progress` even in single-task mode
 
 ### When to Intervene
 
@@ -524,7 +717,7 @@ You may need to work around this or wait for resolution.
 
 **Symptom:** Coordination overhead exceeds actual work.
 
-**Fix:** 2-5 subtasks is the sweet spot. If task is small, don't swarm.
+**Fix:** 2-5 subtasks is the sweet spot. If task is small, don't use hive.
 
 ### The Under-Specified Subtask
 

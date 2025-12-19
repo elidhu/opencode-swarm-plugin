@@ -19,7 +19,7 @@ import {
 } from "../config.js";
 import { checkCommand } from "../utils.js";
 import { DEPENDENCIES, type Dependency } from "../constants.js";
-import { dim, yellow, cyan } from "../branding.js";
+import { dim, yellow, cyan, green } from "../branding.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -229,57 +229,40 @@ export async function doctor(): Promise<void> {
   let missingChecks: VersionCheck[] = [];
   
   if (isInitialized) {
-    p.log.step("Configuration versions:");
-    
     versionChecks = checkVersionConsistency();
     existingChecks = versionChecks.filter((c) => c.exists);
     outdatedChecks = existingChecks.filter((c) => c.outdated);
     missingChecks = versionChecks.filter((c) => !c.exists);
     
-    // Group by config type for clearer output
-    for (const { type, desc } of CONFIG_FILES) {
-      const globalCheck = versionChecks.find(
-        (c) => c.type === type && c.location === "global"
-      );
-      const projectCheck = versionChecks.find(
-        (c) => c.type === type && c.location === "project"
-      );
-      
-      // Only show if at least one exists
-      if (globalCheck?.exists || projectCheck?.exists) {
-        p.log.message(yellow(`${desc}:`));
+    // Show configs in compact table format
+    if (existingChecks.length > 0) {
+      p.log.step("Configuration:");
+      for (const { type, desc } of CONFIG_FILES) {
+        const globalCheck = versionChecks.find((c) => c.type === type && c.location === "global");
+        const projectCheck = versionChecks.find((c) => c.type === type && c.location === "project");
         
-        if (globalCheck?.exists) {
-          const status = globalCheck.outdated ? "⚠ outdated" : "✓";
-          const versionStr = globalCheck.version || "no version";
-          p.log.message(`   global: ${status} ${dim(`(${versionStr})`)}`);
-        }
-        
-        if (projectCheck?.exists) {
-          const status = projectCheck.outdated ? "⚠ outdated" : "✓";
-          const versionStr = projectCheck.version || "no version";
-          p.log.message(`   project: ${status} ${dim(`(${versionStr})`)}`);
+        if (globalCheck?.exists || projectCheck?.exists) {
+          const globalStr = globalCheck?.exists 
+            ? `${globalCheck.outdated ? "⚠" : "✓"} global ${dim(`(${globalCheck.version || "?"})`)}` 
+            : "";
+          const projectStr = projectCheck?.exists 
+            ? `${projectCheck.outdated ? "⚠" : "✓"} project ${dim(`(${projectCheck.version || "?"})`)}` 
+            : "";
+          const parts = [globalStr, projectStr].filter(Boolean).join("  ");
+          console.log(`  ${yellow(desc)}: ${parts}`);
         }
       }
     }
     
     if (outdatedChecks.length > 0) {
-      p.log.warn(
-        `Found ${outdatedChecks.length} outdated config(s). Current version: ${CONFIG_VERSION}`
-      );
-      p.log.message(dim("   └─ Run 'hive sync' to update templates"));
+      p.log.warn(`${outdatedChecks.length} outdated config(s) - run 'hive sync' to update`);
     } else if (existingChecks.length > 0) {
-      p.log.success("All configs are up to date");
+      p.log.success("All configs up to date");
     }
     
-    // Check for missing configs (but don't require them)
     const missingGlobal = missingChecks.filter((c) => c.location === "global");
     if (missingGlobal.length > 0) {
-      p.log.message(
-        dim(
-          `   Note: ${missingGlobal.length} global config(s) missing. Run 'hive setup' to create.`
-        )
-      );
+      console.log(dim(`  Note: ${missingGlobal.length} global config(s) missing. Run 'hive setup' to create.`));
     }
     
     // ========================================================================
@@ -316,7 +299,7 @@ export async function doctor(): Promise<void> {
     }
     
     // ========================================================================
-    // Check Skills
+    // Check Skills (compact)
     // ========================================================================
     
     p.log.step("Skills:");
@@ -324,20 +307,17 @@ export async function doctor(): Promise<void> {
     const globalSkillsPath = join(configDir, "skills");
     const bundledSkillsPath = join(__dirname, "..", "..", "..", "global-skills");
     
-    if (existsSync(globalSkillsPath)) {
-      const skills = getSkills(globalSkillsPath);
-      if (skills.length > 0) {
-        p.log.success(`Global skills (${skills.length}): ${skills.join(", ")}`);
-      } else {
-        p.log.warn("Global skills directory exists but is empty");
-      }
+    const globalSkills = existsSync(globalSkillsPath) ? getSkills(globalSkillsPath) : [];
+    const bundledSkills = existsSync(bundledSkillsPath) ? getSkills(bundledSkillsPath) : [];
+    
+    if (globalSkills.length > 0) {
+      console.log(`  ${green("✓")} Global (${globalSkills.length}): ${globalSkills.join(", ")}`);
     } else {
-      p.log.warn("No global skills directory (run 'hive setup' to create)");
+      console.log(`  ${dim("○")} Global: none ${dim("(run 'hive setup' to create)")}`);
     }
     
-    if (existsSync(bundledSkillsPath)) {
-      const bundled = getSkills(bundledSkillsPath);
-      p.log.success(`Bundled skills (${bundled.length}): ${bundled.join(", ")}`);
+    if (bundledSkills.length > 0) {
+      console.log(`  ${green("✓")} Bundled (${bundledSkills.length}): ${bundledSkills.join(", ")}`);
     }
     
     // ========================================================================

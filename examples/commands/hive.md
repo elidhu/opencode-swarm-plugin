@@ -132,7 +132,7 @@ git push -u origin HEAD
 >
 > **DO NOT decompose inline in the coordinator thread.** This consumes massive context with file reading, CASS queries, and reasoning. You will hit context limits on long swarms.
 >
-> **ALWAYS delegate to a `swarm/planner` subagent** that returns only the validated BeadTree JSON.
+> **ALWAYS delegate to a `hive-planner` subagent** that returns only the validated BeadTree JSON.
 
 **❌ Don't do this (inline planning):**
 
@@ -151,12 +151,12 @@ hive_validate_decomposition(response="...")
 # 1. Create planning bead
 beads_create(title="Plan: <task>", type="task", description="Decompose into subtasks")
 
-# 2. Delegate to swarm/planner subagent
+# 2. Delegate to hive-planner subagent
 Task(
-  subagent_type="swarm/planner",
+  subagent_type="hive-planner",
   description="Decompose task: <task>",
   prompt="
-You are a swarm planner. Generate a BeadTree for this task.
+You are a hive planner. Generate a BeadTree for this task.
 
 ## Task
 <task description>
@@ -242,7 +242,7 @@ See full skill list with skills_list().
 Then spawn:
 
 ```bash
-Task(subagent_type="swarm/worker", description="<bead-title>", prompt="<from hive_spawn_subtask>")
+Task(subagent_type="hive-worker", description="<bead-title>", prompt="<from hive_spawn_subtask>")
 ```
 
 ### 8. Monitor (unless --no-sync)
@@ -394,6 +394,91 @@ if (result.fresh_start) {
 | `hivemail_ack`          | Acknowledge message                 |
 | `hivemail_health`       | Check database health               |
 
+## Single-Task Workflow
+
+For tasks that don't need full hive decomposition but still benefit from structured tracking:
+
+### hive_track_single
+Create a tracking bead for single-agent work without hive decomposition.
+
+**Parameters:**
+- task: Task description
+- files: (optional) Files this agent will modify
+- type: (optional) Bead type (task, feature, bug, chore)
+
+**Example:**
+```bash
+hive_track_single(
+  task="Fix auth token refresh bug",
+  files=["src/auth/token.ts", "src/auth/refresh.ts"],
+  type="bug"
+)
+```
+
+**Returns:**
+```json
+{
+  "bead_id": "single-abc123",
+  "title": "Fix auth token refresh bug",
+  "tracking_initialized": true
+}
+```
+
+**Use Cases:**
+- Quick bug fixes that don't need parallelization
+- Small features touching 1-2 files
+- Exploratory work with uncertain scope
+- Tasks where coordination overhead > benefit
+
+### hive_spawn_child
+Create a child bead for emergent work discovered during execution.
+
+**Parameters:**
+- parent_id: Parent bead ID (from hive_track_single or swarm subtask)
+- title: Child task title
+- description: (optional) Detailed description
+- files: (optional) Files this child will modify
+- type: (optional) Bead type (task, feature, bug, chore)
+
+**Example:**
+```bash
+# During work on parent bead, discover need for related task
+hive_spawn_child(
+  parent_id="single-abc123",
+  title="Add token refresh tests",
+  description="Discovered missing test coverage while fixing bug",
+  files=["src/auth/__tests__/refresh.test.ts"],
+  type="task"
+)
+```
+
+**Returns:**
+```json
+{
+  "bead_id": "single-abc123.1",
+  "parent_id": "single-abc123",
+  "title": "Add token refresh tests",
+  "created": true
+}
+```
+
+**Use Cases:**
+- Discovered scope during implementation
+- Breaking large subtask into smaller pieces
+- Creating follow-up tasks without losing context
+- Building task trees organically
+
+### When to Use Single-Task vs Swarm
+
+| Scenario                        | Recommendation      |
+| ------------------------------- | ------------------- |
+| Task touches 1-2 files          | `hive_track_single` |
+| Task has 3+ independent parts   | Full swarm          |
+| Uncertain scope, needs discovery| `hive_track_single` → `hive_spawn_child` |
+| Time-critical parallel work     | Full swarm          |
+| Sequential dependencies         | `hive_track_single` |
+| Quick fix or chore              | `hive_track_single` |
+
 ## Strategy Reference
 
 | Strategy       | Best For                 | Keywords                              | Recommended Skills                |
@@ -436,7 +521,7 @@ Not: Do Everything Inline → Run Out of Context → Fail
 
 - [ ] **hivemail_init** called FIRST
 - [ ] Knowledge gathered (semantic-memory, CASS, pdf-brain, skills)
-- [ ] **Planning delegated to swarm/planner subagent** (NOT inline)
+- [ ] **Planning delegated to hive-planner subagent** (NOT inline)
 - [ ] BeadTree validated (no file conflicts)
 - [ ] Epic + subtasks created
 - [ ] Files reserved via **hivemail_reserve**
@@ -468,7 +553,7 @@ Not: Do Everything Inline → Run Out of Context → Fail
 
 ```
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃                    🐝 SWARM COMPLETE 🐝                     ┃
+┃                    🐝 HIVE COMPLETE 🐝                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
     EPIC: Add User Authentication

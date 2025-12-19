@@ -1,8 +1,8 @@
 ---
 name: hive-coordination
-description: Multi-agent coordination patterns for OpenCode swarm workflows. Use when working on complex tasks that benefit from parallelization, when coordinating multiple agents, or when managing task decomposition. Do NOT use for simple single-agent tasks.
+description: Multi-agent coordination patterns for OpenCode hive workflows. Use when working on complex tasks that benefit from parallelization, when coordinating multiple agents, or when managing task decomposition. Do NOT use for simple single-agent tasks.
 tags:
-  - swarm
+  - hive
   - multi-agent
   - coordination
 tools:
@@ -15,6 +15,8 @@ tools:
   - hive_progress
   - hive_checkpoint
   - hive_recover
+  - hive_track_single
+  - hive_spawn_child
   - beads_create_epic
   - beads_query
   - hivemail_init
@@ -48,21 +50,188 @@ Hive Mail is embedded (no external server needed) and provides:
 
 ## When to Hive
 
-**DO swarm when:**
+**Three options - NO task should be untracked:**
+
+| Situation | Tool | When to Use |
+| --------- | ---- | ----------- |
+| **Full hive** | `hive_plan_prompt` → `beads_create_epic` → `hive_spawn_subtask` | Task touches 3+ files, natural parallel boundaries, different specializations needed |
+| **Single tracked** | `hive_track_single` | Task is 1-2 files, sequential, but still needs observability, crash recovery, and pattern learning |
+| **Explicit skip** | Document in commit/comment | Only for trivial fixes (typos, config tweaks) where tracking overhead genuinely exceeds value |
+
+**DO use hive when:**
 
 - Task touches 3+ files
 - Natural parallel boundaries exist (frontend/backend/tests)
 - Different specializations needed
 - Time-to-completion matters
 
-**DON'T swarm when:**
+**USE single tracking when:**
 
-- Task is 1-2 files
-- Heavy sequential dependencies
-- Coordination overhead > benefit
-- Tight feedback loop needed
+- Task is 1-2 files but takes >5 minutes
+- Heavy sequential dependencies (no parallelization benefit)
+- You want crash recovery and checkpoint support
+- Complexity might emerge (spawning children)
 
-**Heuristic:** If you can describe the task in one sentence without "and", don't swarm.
+**SKIP tracking only when:**
+
+- Truly trivial (typos, single-line config)
+- <2 minutes end-to-end
+- Zero chance of interesting patterns
+
+**Heuristic:** If you can describe the task in one sentence without "and", don't use hive - but DO track with `hive_track_single`.
+
+## Single-Task Workflow
+
+For tasks that don't need full hive decomposition but still deserve observability. Philosophy: **"Even simple tasks deserve observability."**
+
+### When to Use Single Tracking
+
+Use `hive_track_single` instead of full decomposition when:
+
+- Task is focused on 1-2 files
+- Sequential execution makes sense (no parallelization benefit)
+- You still want crash recovery and progress tracking
+- Complexity might emerge mid-task (child spawning)
+- You want the pattern learning from completion
+
+### Basic Single-Task Flow
+
+```typescript
+// 1. Initialize tracking (creates bead, sets up checkpoint)
+const track = await hive_track_single({
+  project_key: "$PWD",
+  task_description: "Fix auth bypass vulnerability",
+  files: ["src/auth/middleware.ts"],
+  priority: 1,  // Optional: 0-3, lower = higher priority
+});
+
+// 2. Report progress (auto-checkpoints at 25/50/75%)
+await hive_progress({
+  project_key: "$PWD",
+  agent_name: track.agent_name,
+  bead_id: track.bead_id,
+  status: "in_progress",
+  progress_percent: 50,
+  message: "Fixed bypass, adding validation",
+  files_touched: ["src/auth/middleware.ts"],
+});
+
+// 3. Complete with verification
+await hive_complete({
+  project_key: "$PWD",
+  agent_name: track.agent_name,
+  bead_id: track.bead_id,
+  summary: "Fixed auth bypass by validating session tokens",
+  files_touched: ["src/auth/middleware.ts"],
+});
+```
+
+### Self-Organizing: Spawning Children
+
+**Philosophy: "Complexity emerges - capture it"**
+
+While working on a single task, you may discover additional work. Rather than losing this insight or pausing to do full decomposition, spawn a child bead:
+
+```typescript
+// Start single-task tracking
+const track = await hive_track_single({
+  project_key: "$PWD",
+  task_description: "Fix auth bypass vulnerability",
+  files: ["src/auth/middleware.ts"],
+});
+
+// ... work in progress ...
+// Discovered: auth endpoint needs rate limiting!
+
+// Spawn a child bead for the discovery
+const child = await hive_spawn_child({
+  parent_bead_id: track.bead_id,
+  title: "Add rate limiting to auth endpoint",
+  description: "Discovered auth endpoint allows unlimited attempts - needs rate limiting",
+  type: "bug",  // or "task", "chore"
+  files: ["src/auth/rate-limit.ts"],
+});
+
+// Child is now tracked separately
+// You can complete it now, or continue with parent first
+
+// Complete parent task
+await hive_complete({
+  project_key: "$PWD",
+  agent_name: track.agent_name,
+  bead_id: track.bead_id,
+  summary: "Fixed auth bypass. Spawned child for rate limiting discovery.",
+  files_touched: ["src/auth/middleware.ts"],
+});
+
+// Complete child task (can be done later, or by another agent)
+await hive_complete({
+  project_key: "$PWD",
+  agent_name: "worker-rate-limit",
+  bead_id: child.child_bead_id,
+  summary: "Added exponential backoff rate limiting",
+  files_touched: ["src/auth/rate-limit.ts"],
+});
+```
+
+### Key Behaviors
+
+**`hive_track_single`:**
+- Creates a tracking bead with `type: task`
+- Saves initial checkpoint for crash recovery
+- Marks bead as `in_progress` automatically
+- Returns `bead_id` for use with all other hive tools
+
+**`hive_spawn_child`:**
+- Creates child bead linked to parent
+- Notifies coordinator thread via hivemail
+- Stores discovery in semantic memory (for learning)
+- Returns `child_bead_id` for independent tracking
+- Parent continues independently - no blocking
+
+### Sequential Children Are Fine
+
+Not everything needs parallelization. Sequential child spawning is perfectly valid:
+
+```typescript
+// Working on migration
+const track = await hive_track_single({
+  task_description: "Migrate user table schema",
+  files: ["migrations/*.sql"],
+});
+
+// Discovery 1: Need to backfill data
+const backfill = await hive_spawn_child({
+  parent_bead_id: track.bead_id,
+  title: "Backfill user.created_at column",
+});
+
+// Discovery 2: Tests need updating
+const tests = await hive_spawn_child({
+  parent_bead_id: track.bead_id,
+  title: "Update user model tests for new schema",
+});
+
+// All tracked, all sequential, all valuable
+```
+
+### Recovery Support
+
+Single-tracked tasks get full crash recovery:
+
+```typescript
+// If agent crashes mid-task, next agent can recover:
+const recovery = await hive_recover({
+  project_key: "$PWD",
+  epic_id: track.bead_id,  // Single tasks use bead_id as epic_id
+  bead_id: track.bead_id,
+});
+
+if (!recovery.fresh_start) {
+  console.log(`Resuming from ${recovery.context.progress_percent}%`);
+  console.log(`Files touched: ${recovery.context.files_touched.join(", ")}`);
+}
+```
 
 ## Task Clarity Check (BEFORE Decomposing)
 
@@ -157,7 +326,7 @@ Synthesize external findings (CASS, PDF Brain) into `shared_context` for workers
 >
 > **NEVER do planning inline in the coordinator thread.** Decomposition work (file reading, CASS searching, reasoning about task breakdown) consumes massive amounts of context and will exhaust your token budget on long swarms.
 >
-> **ALWAYS delegate planning to a `swarm/planner` subagent** and receive only the structured BeadTree JSON result back.
+> **ALWAYS delegate planning to a `hive-planner` subagent** and receive only the structured BeadTree JSON result back.
 
 **❌ Anti-Pattern (Context-Heavy):**
 
@@ -179,12 +348,12 @@ await beads_create({
   description: `Decompose into subtasks. Context: ${synthesizedContext}`,
 });
 
-// 2. Delegate to swarm/planner subagent
-const planningResult = await Task({
-  subagent_type: "swarm/planner",
+// 2. Delegate to hive-planner subagent
+Task({
+  subagent_type: "hive-planner",
   description: `Decompose task: ${taskTitle}`,
   prompt: `
-You are a swarm planner. Generate a BeadTree for this task.
+You are a hive planner. Generate a BeadTree for this task.
 
 ## Task
 ${taskDescription}
@@ -272,7 +441,7 @@ for (const subtask of subtasks) {
 
   // Spawn via Task tool
   Task({
-    subagent_type: "swarm/worker",
+    subagent_type: "hive-worker",
     prompt: prompt.worker_prompt,
   });
 }
@@ -528,6 +697,7 @@ One blocker affects multiple subtasks.
 
 | Anti-Pattern                | Symptom                                    | Fix                                  |
 | --------------------------- | ------------------------------------------ | ------------------------------------ |
+| **Untracked Work** ⚠️       | Tasks without beads, no recovery/learning  | Use `hive_track_single` for ALL work |
 | **Decomposing Vague Tasks** | Wrong subtasks, wasted agent cycles        | Ask clarifying questions FIRST       |
 | **Mega-Coordinator**        | Coordinator editing files                  | Coordinator only orchestrates        |
 | **Silent Hive**            | No communication, late conflicts           | Require updates, check inbox         |
@@ -540,6 +710,8 @@ One blocker affects multiple subtasks.
 | **Checkpoint Spam** ⚠️      | Manual checkpoint every 5 minutes          | Trust auto-checkpoint at milestones  |
 | **Recovery Amnesia**        | Starting fresh without checking recovery   | ALWAYS hive_recover before starting  |
 | **Empty Directives**        | Checkpoints with no useful context         | Only checkpoint with valuable notes  |
+| **Lost Discoveries**        | Finding extra work but not tracking it     | Use `hive_spawn_child` immediately   |
+| **Forced Parallelization**  | Spawning children just to parallelize      | Sequential children are fine!        |
 
 ## Shared Context Template
 
@@ -682,6 +854,30 @@ Directives let you pass knowledge to future agents working on:
 | `hive_recover`      | Check for previous checkpoint, resume from there  |
 | Auto-checkpoint     | Happens automatically at 25%, 50%, 75% milestones |
 
+## Single-Task Quick Reference
+
+| Tool                | Purpose                                           |
+| ------------------- | ------------------------------------------------- |
+| `hive_track_single` | Create tracking bead for single-agent work        |
+| `hive_spawn_child`  | Create child bead for emergent work               |
+
+**`hive_track_single` args:**
+- `project_key` - Project path (required)
+- `task_description` - What you're working on (required)
+- `files` - Files you'll modify (optional, enables checkpointing)
+- `priority` - 0-3, lower = higher priority (optional, default: 2)
+- `agent_name` - Agent name (optional, auto-generated)
+
+**`hive_spawn_child` args:**
+- `parent_bead_id` - Parent bead to create child under (required)
+- `title` - Child task title (required)
+- `description` - What needs to be done (optional)
+- `files` - Related files (optional)
+- `type` - "task", "bug", or "chore" (default: "task")
+- `priority` - 0-3, inherits from parent if not specified (optional)
+
+**Philosophy:** "Even simple tasks deserve observability" + "Complexity emerges - capture it"
+
 ## Full Hive Flow (Coordinator)
 
 ```typescript
@@ -815,7 +1011,7 @@ When completing a swarm, output a beautiful summary with:
 
 ```
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃         🐝 SWARM COMPLETE 🐝                 ┃
+┃         🐝 HIVE COMPLETE 🐝                  ┃
 ┃                                              ┃
 ┃   Epic: Add Authentication                   ┃
 ┃   Subtasks: 4/4 ✓                            ┃

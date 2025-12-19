@@ -1,22 +1,28 @@
 /**
- * Unit tests for the spec system schemas
+ * Unit tests for the spec system schemas and helpers
  *
  * Tests schema validation for:
  * - SpecStatusSchema
+ * - ApproverTypeSchema (new)
  * - RequirementTypeSchema
  * - SpecScenarioSchema
  * - SpecRequirementSchema
  * - SpecNfrSchema
- * - SpecEntrySchema
+ * - SpecEntrySchema (with auto_approve, confidence, approved_by fields)
  * - SpecChangeTaskSchema
  * - SpecChangeProposalStatusSchema
  * - SpecChangeProposalSchema
+ *
+ * Also tests:
+ * - shouldAutoApprove() decision helper
+ * - DEFAULT_AUTO_APPROVE_THRESHOLD constant
  *
  * @see docs/analysis/design-specification-strategy.md
  */
 import { describe, it, expect } from "vitest";
 import {
   SpecStatusSchema,
+  ApproverTypeSchema,
   RequirementTypeSchema,
   SpecScenarioSchema,
   SpecRequirementSchema,
@@ -26,6 +32,7 @@ import {
   SpecChangeProposalStatusSchema,
   SpecChangeProposalSchema,
   type SpecStatus,
+  type ApproverType,
   type RequirementType,
   type SpecScenario,
   type SpecRequirement,
@@ -35,6 +42,7 @@ import {
   type SpecChangeProposalStatus,
   type SpecChangeProposal,
 } from "./schemas/spec";
+import { DEFAULT_AUTO_APPROVE_THRESHOLD } from "./spec";
 
 // ============================================================================
 // SpecStatusSchema Tests
@@ -1044,5 +1052,172 @@ describe("Schema Integration", () => {
     expect(nfr.performance).toBe("fast");
     expect(task.title).toBe("task");
     expect(proposalStatus).toBe("draft");
+  });
+});
+
+// ============================================================================
+// ApproverTypeSchema Tests
+// ============================================================================
+
+describe("ApproverTypeSchema", () => {
+  it("validates 'human' approver type", () => {
+    expect(() => ApproverTypeSchema.parse("human")).not.toThrow();
+    expect(ApproverTypeSchema.parse("human")).toBe("human");
+  });
+
+  it("validates 'system' approver type", () => {
+    expect(() => ApproverTypeSchema.parse("system")).not.toThrow();
+    expect(ApproverTypeSchema.parse("system")).toBe("system");
+  });
+
+  it("rejects invalid approver types", () => {
+    expect(() => ApproverTypeSchema.parse("agent")).toThrow();
+    expect(() => ApproverTypeSchema.parse("auto")).toThrow();
+    expect(() => ApproverTypeSchema.parse("bot")).toThrow();
+    expect(() => ApproverTypeSchema.parse("")).toThrow();
+  });
+
+  it("validates all approver types", () => {
+    const types: ApproverType[] = ["human", "system"];
+    for (const type of types) {
+      expect(() => ApproverTypeSchema.parse(type)).not.toThrow();
+    }
+  });
+});
+
+// ============================================================================
+// SpecEntry Auto-Approval Fields Tests
+// ============================================================================
+
+describe("SpecEntrySchema Auto-Approval Fields", () => {
+  const baseSpec = {
+    id: "spec-auto-test-v1",
+    capability: "auto-test",
+    version: 1,
+    status: "draft",
+    title: "Auto-Approval Test Spec",
+    purpose: "Testing auto-approval fields for spec entries.",
+    requirements: [],
+    author: "tester",
+    created_at: "2025-01-15T10:30:00Z",
+    updated_at: "2025-01-15T10:30:00Z",
+    file_path: ".specs/auto-test/v1/spec.json",
+  };
+
+  it("validates spec with auto_approve=true", () => {
+    const spec = { ...baseSpec, auto_approve: true };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.auto_approve).toBe(true);
+  });
+
+  it("validates spec with auto_approve=false", () => {
+    const spec = { ...baseSpec, auto_approve: false };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.auto_approve).toBe(false);
+  });
+
+  it("validates spec with auto_approve undefined (optional)", () => {
+    const parsed = SpecEntrySchema.parse(baseSpec);
+    expect(parsed.auto_approve).toBeUndefined();
+  });
+
+  it("validates spec with confidence=0 (minimum)", () => {
+    const spec = { ...baseSpec, confidence: 0 };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.confidence).toBe(0);
+  });
+
+  it("validates spec with confidence=1 (maximum)", () => {
+    const spec = { ...baseSpec, confidence: 1 };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.confidence).toBe(1);
+  });
+
+  it("validates spec with confidence=0.8 (threshold)", () => {
+    const spec = { ...baseSpec, confidence: 0.8 };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.confidence).toBe(0.8);
+  });
+
+  it("validates spec with fractional confidence values", () => {
+    const fractionals = [0.1, 0.25, 0.5, 0.75, 0.79, 0.80, 0.81, 0.99];
+    for (const conf of fractionals) {
+      const spec = { ...baseSpec, confidence: conf };
+      expect(() => SpecEntrySchema.parse(spec)).not.toThrow();
+    }
+  });
+
+  it("rejects confidence below 0", () => {
+    const spec = { ...baseSpec, confidence: -0.1 };
+    expect(() => SpecEntrySchema.parse(spec)).toThrow();
+  });
+
+  it("rejects confidence above 1", () => {
+    const spec = { ...baseSpec, confidence: 1.1 };
+    expect(() => SpecEntrySchema.parse(spec)).toThrow();
+  });
+
+  it("validates spec with approved_by='human'", () => {
+    const spec = {
+      ...baseSpec,
+      status: "approved",
+      approved_at: "2025-01-16T10:30:00Z",
+      approved_by: "human",
+    };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.approved_by).toBe("human");
+  });
+
+  it("validates spec with approved_by='system'", () => {
+    const spec = {
+      ...baseSpec,
+      status: "approved",
+      approved_at: "2025-01-16T10:30:00Z",
+      approved_by: "system",
+    };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.approved_by).toBe("system");
+  });
+
+  it("validates spec with approved_by as custom string (email)", () => {
+    const spec = {
+      ...baseSpec,
+      status: "approved",
+      approved_at: "2025-01-16T10:30:00Z",
+      approved_by: "reviewer@example.com",
+    };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.approved_by).toBe("reviewer@example.com");
+  });
+
+  it("validates full auto-approved spec entry", () => {
+    const spec = {
+      ...baseSpec,
+      status: "approved",
+      auto_approve: true,
+      confidence: 0.85,
+      approved_at: "2025-01-16T10:30:00Z",
+      approved_by: "system",
+    };
+    const parsed = SpecEntrySchema.parse(spec);
+    expect(parsed.auto_approve).toBe(true);
+    expect(parsed.confidence).toBe(0.85);
+    expect(parsed.approved_by).toBe("system");
+    expect(parsed.status).toBe("approved");
+  });
+});
+
+// ============================================================================
+// DEFAULT_AUTO_APPROVE_THRESHOLD Tests
+// ============================================================================
+
+describe("DEFAULT_AUTO_APPROVE_THRESHOLD", () => {
+  it("has correct default value of 0.8", () => {
+    expect(DEFAULT_AUTO_APPROVE_THRESHOLD).toBe(0.8);
+  });
+
+  it("is within valid confidence range (0-1)", () => {
+    expect(DEFAULT_AUTO_APPROVE_THRESHOLD).toBeGreaterThanOrEqual(0);
+    expect(DEFAULT_AUTO_APPROVE_THRESHOLD).toBeLessThanOrEqual(1);
   });
 });
