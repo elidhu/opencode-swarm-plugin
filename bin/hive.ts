@@ -29,6 +29,7 @@ import { init } from "../src/cli/commands/init.js";
 import { syncCommand as sync } from "../src/cli/commands/sync.js";
 import { config } from "../src/cli/commands/config.js";
 import { inboxCommand } from "../src/cli/commands/inbox.js";
+import { metricsCommand } from "../src/cli/commands/metrics.js";
 
 // Import shared utilities
 import { dim, yellow, cyan, green, magenta, HONEYCOMB, BANNER, TAGLINE, PACKAGE_NAME, getRandomMessage } from "../src/cli/branding.js";
@@ -171,6 +172,7 @@ ${cyan("Commands:")}
   hive sync      Update config templates to latest versions
   hive config    Show paths to generated config files
   hive inbox     Human inbox for Swarm Mail messages
+  hive metrics   Learning system health metrics
   hive spec      Design specification management
   hive update    Update to latest version
   hive version   Show version and banner
@@ -334,6 +336,12 @@ switch (command) {
     // Pass remaining args to inbox command
     const inboxArgs = process.argv.slice(3);
     await inboxCommand(inboxArgs);
+    break;
+  }
+  case "metrics": {
+    // Pass remaining args to metrics command
+    const metricsArgs = process.argv.slice(3);
+    await metricsCommand(metricsArgs);
     break;
   }
   case "spec": {

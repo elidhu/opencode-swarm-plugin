@@ -787,6 +787,67 @@ describe("Swarm Tool Integrations", () => {
       expect(parsed.feedback_events).toHaveLength(1);
       expect(parsed.feedback_events[0].criterion).toBe("custom_criterion");
     });
+
+    it("stores feedback events for criterion weight calculation", async () => {
+      const result = await hive_record_outcome.execute(
+        {
+          bead_id: `test-feedback-store-${Date.now()}`,
+          duration_ms: 60000,
+          error_count: 0,
+          retry_count: 0,
+          success: true,
+        },
+        mockContext,
+      );
+
+      const parsed = JSON.parse(result);
+
+      // Verify the feedback was persisted to storage
+      expect(parsed.feedback_stored).toBe(true);
+      expect(parsed.note).toContain("Feedback events stored");
+    });
+
+    it("includes strategy in feedback context", async () => {
+      const result = await hive_record_outcome.execute(
+        {
+          bead_id: `test-strategy-${Date.now()}`,
+          duration_ms: 60000,
+          error_count: 0,
+          retry_count: 0,
+          success: true,
+          strategy: "file-based",
+        },
+        mockContext,
+      );
+
+      const parsed = JSON.parse(result);
+
+      expect(parsed.summary.strategy).toBe("file-based");
+      // Strategy should be included in feedback context
+      const feedbackWithStrategy = parsed.feedback_events.find((e: any) =>
+        e.context?.includes("strategy: file-based"),
+      );
+      expect(feedbackWithStrategy).toBeDefined();
+    });
+
+    it("classifies failure mode from details when not provided", async () => {
+      const result = await hive_record_outcome.execute(
+        {
+          bead_id: `test-failure-classify-${Date.now()}`,
+          duration_ms: 120000,
+          error_count: 3,
+          retry_count: 2,
+          success: false,
+          failure_details: "Request timeout exceeded",
+        },
+        mockContext,
+      );
+
+      const parsed = JSON.parse(result);
+
+      expect(parsed.summary.success).toBe(false);
+      expect(parsed.summary.failure_mode).toBe("timeout");
+    });
   });
 
   describe("detectInstructionConflicts", () => {

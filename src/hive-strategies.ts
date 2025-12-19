@@ -364,7 +364,7 @@ ${examples}`;
  */
 export const hive_select_strategy = tool({
   description:
-    "Analyze task and recommend decomposition strategy (file-based, feature-based, or risk-based)",
+    "Analyze task and recommend decomposition strategy (file-based, feature-based, risk-based, or research-based)",
   args: {
     task: tool.schema.string().min(1).describe("Task description to analyze"),
     codebase_context: tool.schema

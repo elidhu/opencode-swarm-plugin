@@ -78,6 +78,11 @@ import {
   scoreImplicitFeedback,
   type StrikeStorage,
 } from "./learning";
+import {
+  createPatternMaturity,
+  updatePatternMaturity,
+  type MaturityFeedback,
+} from "./pattern-maturity";
 import { getStorage } from "./storage";
 import { getOutcomeAdapter, type UnifiedOutcome } from "./outcomes";
 import {
@@ -98,7 +103,7 @@ import {
   type CheckpointRecoverArgs,
   type DecompositionStrategy,
 } from "./schemas/checkpoint";
-import { spec_quick_write, loadSpec } from "./spec";
+
 
 // ============================================================================
 // Beads CLI Isolation for Testing
@@ -145,307 +150,6 @@ async function runBdCommand(
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
-  };
-}
-
-// ============================================================================
-// Spec Generation Types (re-exported from hive-config.ts)
-// ============================================================================
-
-// Import shared config from hive-config.ts to avoid circular dependencies
-// hive-prompts.ts also imports from hive-config.ts
-export {
-  type SpecGenerationConfig,
-  DEFAULT_SPEC_CONFIG,
-  type SpecGenerationDecision,
-  type SubtaskForSpec,
-} from "./hive-config";
-
-// Local import for use in this module
-import {
-  DEFAULT_SPEC_CONFIG,
-  type SpecGenerationConfig,
-  type SpecGenerationDecision,
-  type SubtaskForSpec,
-} from "./hive-config";
-
-// ============================================================================
-// Spec Generation Helpers
-// ============================================================================
-
-/**
- * Determine if a spec should be generated for a subtask
- *
- * Decision criteria:
- * | Condition | Generate Spec? | Auto-Approve? |
- * |-----------|---------------|---------------|
- * | complexity >= 4 | Yes | No (needs review) |
- * | complexity == 3 | Yes | Yes |
- * | complexity <= 2 | No | N/A |
- * | type == "feature" | Yes | Depends on complexity |
- * | type == "bug" | No | N/A |
- * | has open questions | Yes | No |
- *
- * @param subtask - The subtask to analyze
- * @param taskType - Type of the parent task
- * @param hasOpenQuestions - Whether there are unresolved questions
- * @param config - Configuration overrides
- * @returns Decision about spec generation
- */
-export function shouldGenerateSpec(
-  subtask: SubtaskForSpec,
-  taskType: "feature" | "epic" | "task" | "bug" | "chore" = "task",
-  hasOpenQuestions: boolean = false,
-  config: Partial<SpecGenerationConfig> = {},
-): SpecGenerationDecision {
-  const cfg = { ...DEFAULT_SPEC_CONFIG, ...config };
-
-  // Skip types that shouldn't generate specs
-  if (cfg.skip_types.includes(taskType as "bug" | "chore")) {
-    return {
-      should_generate: false,
-      auto_approve: false,
-      reasoning: `Task type '${taskType}' is configured to skip spec generation`,
-      confidence: 0,
-    };
-  }
-
-  const complexity = subtask.estimated_complexity;
-
-  // Low complexity tasks don't need specs
-  if (complexity < cfg.complexity_threshold) {
-    return {
-      should_generate: false,
-      auto_approve: false,
-      reasoning: `Complexity ${complexity} is below threshold ${cfg.complexity_threshold}`,
-      confidence: 0,
-    };
-  }
-
-  // Calculate confidence based on multiple factors
-  let confidence = cfg.default_confidence;
-
-  // Adjust confidence based on complexity clarity
-  if (complexity === 3) {
-    confidence = 0.85; // Medium complexity, clear scope
-  } else if (complexity >= 4) {
-    confidence = 0.65; // High complexity, may need review
-  }
-
-  // Open questions reduce confidence and prevent auto-approval
-  if (hasOpenQuestions) {
-    confidence = Math.min(confidence, 0.6); // Cap at 0.6 with open questions
-    return {
-      should_generate: true,
-      auto_approve: false,
-      reasoning: `Complexity ${complexity} triggers spec generation, but open questions prevent auto-approval`,
-      confidence,
-    };
-  }
-
-  // Feature/epic types always generate specs when threshold met
-  if (cfg.spec_types.includes(taskType as "feature" | "epic" | "task")) {
-    // Auto-approve only at medium complexity without open questions
-    const autoApprove = complexity <= cfg.auto_approve_complexity;
-
-    return {
-      should_generate: true,
-      auto_approve: autoApprove,
-      reasoning: autoApprove
-        ? `Complexity ${complexity} with type '${taskType}' qualifies for auto-approved spec`
-        : `Complexity ${complexity} exceeds auto-approve threshold (${cfg.auto_approve_complexity}) - requires review`,
-      confidence,
-    };
-  }
-
-  // Default: generate spec but require review
-  return {
-    should_generate: true,
-    auto_approve: false,
-    reasoning: `Complexity ${complexity} triggers spec generation with human review`,
-    confidence,
-  };
-}
-
-/**
- * Generate a spec for a subtask using spec_quick_write
- *
- * Creates a lightweight spec from subtask information. Uses auto-approval
- * when the decision allows it.
- *
- * @param subtask - Subtask to generate spec for
- * @param epicTitle - Title of the parent epic
- * @param decision - Spec generation decision (from shouldGenerateSpec)
- * @param ctx - Tool execution context
- * @returns Spec creation result
- */
-export async function generateSubtaskSpec(
-  subtask: SubtaskForSpec,
-  epicTitle: string,
-  decision: SpecGenerationDecision,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx: any,
-): Promise<{
-  success: boolean;
-  spec_id?: string;
-  auto_approved?: boolean;
-  error?: string;
-}> {
-  if (!decision.should_generate) {
-    return {
-      success: false,
-      error: "Spec generation not triggered",
-    };
-  }
-
-  try {
-    // Generate capability slug from title
-    const capability = subtask.title
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/\s+/g, "-")
-      .slice(0, 50);
-
-    // Create minimal requirement from subtask description
-    const requirements = [
-      {
-        name: subtask.title.slice(0, 50),
-        type: "should" as const,
-        description: subtask.description || `Implement ${subtask.title}`,
-        scenarios: [
-          {
-            name: "Basic functionality",
-            given: "The system is in its default state",
-            when: `The ${subtask.title} operation is performed`,
-            then: ["The operation completes successfully"],
-          },
-        ],
-      },
-    ];
-
-    // Call spec_quick_write
-    const result = await spec_quick_write.execute(
-      {
-        capability,
-        title: `[AUTO] ${subtask.title}`,
-        purpose: `Auto-generated spec for subtask in epic: ${epicTitle}. ${subtask.description || ""}`.slice(
-          0,
-          200,
-        ),
-        requirements,
-        auto_approve: decision.auto_approve,
-        confidence: decision.confidence,
-        tags: ["auto-generated", "hive-orchestration"],
-      },
-      ctx,
-    );
-
-    const parsed = JSON.parse(result);
-
-    if (!parsed.success) {
-      return {
-        success: false,
-        error: parsed.error || "Unknown error creating spec",
-      };
-    }
-
-    return {
-      success: true,
-      spec_id: parsed.spec_id,
-      auto_approved: parsed.auto_approved,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: `Failed to generate spec: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-}
-
-/**
- * Check if spec generation should be triggered based on explicit flag or heuristics
- *
- * This function consolidates all spec generation triggers:
- * 1. Explicit --spec flag
- * 2. Task complexity threshold
- * 3. Task type matching
- * 4. Subtask count threshold
- *
- * @param options - Trigger evaluation options
- * @returns Whether specs should be generated
- */
-export function isSpecGenerationTriggered(options: {
-  explicit_flag?: boolean;
-  task_complexity?: number;
-  task_type?: string;
-  subtask_count?: number;
-  config?: Partial<SpecGenerationConfig>;
-}): {
-  triggered: boolean;
-  reason: string;
-} {
-  const cfg = { ...DEFAULT_SPEC_CONFIG, ...(options.config || {}) };
-
-  // Explicit flag takes precedence
-  if (options.explicit_flag === true) {
-    return {
-      triggered: true,
-      reason: "Explicit --spec flag provided",
-    };
-  }
-
-  if (options.explicit_flag === false) {
-    return {
-      triggered: false,
-      reason: "Spec generation explicitly disabled",
-    };
-  }
-
-  // Check task type
-  if (options.task_type) {
-    if (cfg.skip_types.includes(options.task_type as "bug" | "chore")) {
-      return {
-        triggered: false,
-        reason: `Task type '${options.task_type}' skips spec generation`,
-      };
-    }
-
-    if (cfg.spec_types.includes(options.task_type as "feature" | "epic" | "task")) {
-      // Feature/epic tasks generate specs if complexity is sufficient
-      if (
-        options.task_complexity !== undefined &&
-        options.task_complexity >= cfg.complexity_threshold
-      ) {
-        return {
-          triggered: true,
-          reason: `Task type '${options.task_type}' with complexity ${options.task_complexity}`,
-        };
-      }
-    }
-  }
-
-  // Check complexity threshold alone
-  if (
-    options.task_complexity !== undefined &&
-    options.task_complexity >= cfg.complexity_threshold
-  ) {
-    return {
-      triggered: true,
-      reason: `Task complexity ${options.task_complexity} >= threshold ${cfg.complexity_threshold}`,
-    };
-  }
-
-  // Check subtask count (many subtasks suggests complexity)
-  if (options.subtask_count !== undefined && options.subtask_count > 5) {
-    return {
-      triggered: true,
-      reason: `High subtask count (${options.subtask_count}) suggests complex task`,
-    };
-  }
-
-  return {
-    triggered: false,
-    reason: "No spec generation triggers matched",
   };
 }
 
@@ -1177,10 +881,12 @@ export const hive_complete = tool({
 
     // Store successful pattern in semantic memory
     let memoryStored = false;
+    let maturityTracked = false;
+    const patternId = `pattern-${args.bead_id}-${Date.now()}`;
     try {
       const storage = getStorage();
       await storage.storePattern({
-        id: `pattern-${args.bead_id}-${Date.now()}`,
+        id: patternId,
         content: `Task "${args.bead_id}" completed: ${args.summary}`,
         kind: "pattern",
         is_negative: false,
@@ -1193,6 +899,39 @@ export const hive_complete = tool({
       });
       memoryStored = true;
       console.log(`[hive] Stored success pattern for ${args.bead_id}`);
+
+      // CRITICAL: Track pattern maturity for learning progression
+      // This was missing - patterns were stored but maturity never tracked!
+      try {
+        // Create or get existing maturity record
+        let maturity = await storage.getMaturity(patternId);
+        if (!maturity) {
+          maturity = createPatternMaturity(patternId);
+        }
+
+        // Record helpful feedback for this pattern
+        const maturityFeedback: MaturityFeedback = {
+          pattern_id: patternId,
+          type: "helpful",
+          timestamp: new Date().toISOString(),
+          weight: 1.0,
+        };
+        await storage.storeMaturityFeedback(maturityFeedback);
+
+        // Get all feedback for this pattern and update maturity state
+        const allFeedback = await storage.getMaturityFeedback(patternId);
+        const updatedMaturity = updatePatternMaturity(maturity, allFeedback);
+        await storage.storeMaturity(updatedMaturity);
+
+        maturityTracked = true;
+        console.log(
+          `[hive] Updated pattern maturity for ${patternId}: ${updatedMaturity.state} (${updatedMaturity.helpful_count} helpful, ${updatedMaturity.harmful_count} harmful)`,
+        );
+      } catch (maturityError) {
+        console.warn(
+          `[hive] Failed to track pattern maturity: ${maturityError instanceof Error ? maturityError.message : String(maturityError)}`,
+        );
+      }
     } catch (error) {
       console.warn(
         `[hive] Failed to store success pattern: ${error instanceof Error ? error.message : String(error)}`,
@@ -1235,6 +974,7 @@ export const hive_complete = tool({
       reservations_released: true,
       message_sent: true,
       memory_stored: memoryStored,
+      maturity_tracked: maturityTracked,
       outcome_recorded: outcomeRecorded,
       verification_gate: verificationResult
         ? {
@@ -1395,6 +1135,22 @@ export const hive_record_outcome = tool({
       return event;
     });
 
+    // CRITICAL: Store feedback events for criterion weight calculation
+    // This was missing - feedback was generated but never persisted!
+    let feedbackStored = false;
+    try {
+      const storage = getStorage();
+      for (const event of feedbackEvents) {
+        await storage.storeFeedback(event);
+      }
+      feedbackStored = true;
+      console.log(`[hive] Stored ${feedbackEvents.length} feedback events for ${args.bead_id}`);
+    } catch (error) {
+      console.warn(
+        `[hive] Failed to store feedback events: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     return JSON.stringify(
       {
         success: true,
@@ -1420,7 +1176,10 @@ export const hive_record_outcome = tool({
           accumulated_errors: errorStats.total,
           unresolved_errors: errorStats.unresolved,
         },
-        note: "Feedback events should be stored for criterion weight calculation. Use learning.ts functions to apply weights.",
+        feedback_stored: feedbackStored,
+        note: feedbackStored
+          ? "Feedback events stored for criterion weight calculation."
+          : "Feedback storage failed - events not persisted. Use learning.ts functions to retry.",
       },
       null,
       2,
@@ -2601,269 +2360,6 @@ Self-organizing task structure allows the hive to adapt without coordinator over
 });
 
 // ============================================================================
-// Spec-Aware Orchestration Tools
-// ============================================================================
-
-/**
- * Generate specs for subtasks during orchestration
- *
- * This tool integrates spec generation into the hive orchestration flow.
- * Call after decomposition to optionally create specs for complex subtasks.
- *
- * Spec generation is triggered when:
- * - explicit_spec=true flag is passed
- * - Task complexity >= 3
- * - Task type is "feature" or "epic"
- * - Subtask count > 5
- *
- * Auto-approval happens when:
- * - Complexity == 3 AND no open questions
- * - explicit auto_approve=true
- *
- * @example
- * ```typescript
- * // After decomposition
- * const decomposition = await hive_decompose(...);
- *
- * // Generate specs for complex subtasks
- * const specResult = await hive_generate_specs({
- *   epic_title: "Add OAuth support",
- *   subtasks: decomposition.subtasks,
- *   task_type: "feature",
- * });
- * ```
- */
-export const hive_generate_specs = tool({
-  description: `Generate specs for subtasks during orchestration. Integrates spec_quick_write with complexity-based triggers.
-
-Use after hive_decompose to create specs for complex subtasks. Specs are auto-approved when complexity=3 and no open questions exist.
-
-Triggers:
-- explicit_spec=true
-- complexity >= 3
-- task type is "feature" or "epic"
-- subtask count > 5`,
-  args: {
-    epic_title: tool.schema.string().describe("Title of the parent epic"),
-    subtasks: tool.schema
-      .array(
-        tool.schema.object({
-          title: tool.schema.string(),
-          description: tool.schema.string().optional(),
-          files: tool.schema.array(tool.schema.string()),
-          estimated_complexity: tool.schema.number().min(1).max(5),
-          dependencies: tool.schema.array(tool.schema.number()).optional(),
-        }),
-      )
-      .describe("Subtasks from decomposition"),
-    task_type: tool.schema
-      .enum(["feature", "epic", "task", "bug", "chore"])
-      .default("task")
-      .describe("Type of the parent task"),
-    explicit_spec: tool.schema
-      .boolean()
-      .optional()
-      .describe("Explicitly trigger spec generation for all subtasks"),
-    open_questions: tool.schema
-      .array(tool.schema.string())
-      .optional()
-      .describe("Open questions that prevent auto-approval"),
-    config: tool.schema
-      .object({
-        complexity_threshold: tool.schema.number().optional(),
-        auto_approve_complexity: tool.schema.number().optional(),
-        default_confidence: tool.schema.number().optional(),
-      })
-      .optional()
-      .describe("Override default spec generation config"),
-  },
-  async execute(args, ctx) {
-    // Check if spec generation is triggered at all
-    const triggerCheck = isSpecGenerationTriggered({
-      explicit_flag: args.explicit_spec,
-      task_type: args.task_type,
-      subtask_count: args.subtasks.length,
-      config: args.config,
-    });
-
-    if (!triggerCheck.triggered) {
-      return JSON.stringify(
-        {
-          success: true,
-          specs_generated: 0,
-          reason: triggerCheck.reason,
-          subtasks_analyzed: args.subtasks.length,
-          message: "No specs generated - triggers not met",
-        },
-        null,
-        2,
-      );
-    }
-
-    const hasOpenQuestions =
-      args.open_questions !== undefined && args.open_questions.length > 0;
-
-    const results: Array<{
-      subtask_title: string;
-      decision: SpecGenerationDecision;
-      spec_id?: string;
-      auto_approved?: boolean;
-      error?: string;
-    }> = [];
-
-    // Process each subtask
-    for (const subtask of args.subtasks) {
-      // Determine if this specific subtask should get a spec
-      const decision = shouldGenerateSpec(
-        subtask,
-        args.task_type,
-        hasOpenQuestions,
-        args.config,
-      );
-
-      if (decision.should_generate) {
-        // Generate the spec
-        const specResult = await generateSubtaskSpec(
-          subtask,
-          args.epic_title,
-          decision,
-          ctx,
-        );
-
-        results.push({
-          subtask_title: subtask.title,
-          decision,
-          spec_id: specResult.spec_id,
-          auto_approved: specResult.auto_approved,
-          error: specResult.error,
-        });
-      } else {
-        results.push({
-          subtask_title: subtask.title,
-          decision,
-        });
-      }
-    }
-
-    // Summarize results
-    const specsGenerated = results.filter((r) => r.spec_id).length;
-    const autoApproved = results.filter((r) => r.auto_approved).length;
-    const needsReview = specsGenerated - autoApproved;
-    const skipped = results.filter((r) => !r.decision.should_generate).length;
-
-    return JSON.stringify(
-      {
-        success: true,
-        trigger_reason: triggerCheck.reason,
-        specs_generated: specsGenerated,
-        auto_approved: autoApproved,
-        needs_review: needsReview,
-        skipped,
-        has_open_questions: hasOpenQuestions,
-        results: results.map((r) => ({
-          subtask: r.subtask_title,
-          generated: !!r.spec_id,
-          spec_id: r.spec_id,
-          auto_approved: r.auto_approved,
-          reasoning: r.decision.reasoning,
-          confidence: r.decision.confidence,
-          error: r.error,
-        })),
-        next_steps:
-          needsReview > 0
-            ? [
-                `${needsReview} spec(s) require human review`,
-                "Use spec_query(status='draft') to list pending specs",
-                "Use spec_submit() to submit specs for review",
-              ]
-            : specsGenerated > 0
-              ? [
-                  `${autoApproved} spec(s) auto-approved`,
-                  "Specs are ready for implementation",
-                  "Use spec_implement() when ready",
-                ]
-              : ["No specs generated for these subtasks"],
-      },
-      null,
-      2,
-    );
-  },
-});
-
-/**
- * Check if a task should trigger spec generation
- *
- * Lightweight check to determine if specs should be generated without
- * actually creating them. Use before decomposition to inform the planning.
- */
-export const hive_check_spec_trigger = tool({
-  description: `Check if a task should trigger spec generation. Use before decomposition to inform planning.
-
-Returns trigger status without generating specs. Useful for understanding when spec_quick_write should be used.`,
-  args: {
-    task_description: tool.schema.string().describe("Task being analyzed"),
-    task_type: tool.schema
-      .enum(["feature", "epic", "task", "bug", "chore"])
-      .default("task")
-      .describe("Type of task"),
-    estimated_complexity: tool.schema
-      .number()
-      .min(1)
-      .max(5)
-      .optional()
-      .describe("Estimated complexity (1-5)"),
-    subtask_count: tool.schema
-      .number()
-      .optional()
-      .describe("Expected number of subtasks"),
-    explicit_spec: tool.schema
-      .boolean()
-      .optional()
-      .describe("Explicit spec generation flag"),
-  },
-  async execute(args) {
-    const triggerResult = isSpecGenerationTriggered({
-      explicit_flag: args.explicit_spec,
-      task_type: args.task_type,
-      task_complexity: args.estimated_complexity,
-      subtask_count: args.subtask_count,
-    });
-
-    // Provide guidance based on result
-    const guidance = triggerResult.triggered
-      ? {
-          recommendation: "Generate specs for complex subtasks",
-          when_to_auto_approve:
-            "complexity <= 3 AND no open questions AND high confidence",
-          tools_to_use: [
-            "spec_quick_write (with auto_approve=true for routine tasks)",
-            "hive_generate_specs (after decomposition)",
-          ],
-        }
-      : {
-          recommendation: "Spec generation not needed for this task",
-          override:
-            "Use explicit_spec=true to force spec generation if needed",
-        };
-
-    return JSON.stringify(
-      {
-        task_type: args.task_type,
-        estimated_complexity: args.estimated_complexity,
-        subtask_count: args.subtask_count,
-        explicit_spec: args.explicit_spec,
-        will_trigger: triggerResult.triggered,
-        reason: triggerResult.reason,
-        guidance,
-        config: DEFAULT_SPEC_CONFIG,
-      },
-      null,
-      2,
-    );
-  },
-});
-
-// ============================================================================
 // Export tools
 // ============================================================================
 
@@ -2883,6 +2379,4 @@ export const orchestrateTools = {
   hive_learn,
   hive_track_single,
   hive_spawn_child,
-  hive_generate_specs,
-  hive_check_spec_trigger,
 };

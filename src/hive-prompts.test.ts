@@ -14,19 +14,15 @@ import {
   STRATEGY_DECOMPOSITION_PROMPT,
   SUBTASK_PROMPT,
   SUBTASK_PROMPT_V2,
-  SPEC_GENERATION_PROMPT,
   EVALUATION_PROMPT,
   // Formatting functions
   formatSubtaskPrompt,
   formatSubtaskPromptV2,
   formatEvaluationPrompt,
-  formatSpecGenerationPrompt,
-  getSpecDecisionCriteria,
   // Tools
   hive_subtask_prompt,
   hive_spawn_subtask,
   hive_evaluation_prompt,
-  hive_spec_guidance,
 } from "./hive-prompts";
 
 // ============================================================================
@@ -132,11 +128,6 @@ describe("Template Constants", () => {
       expect(SUBTASK_PROMPT_V2).toContain("hivemail_send");
     });
 
-    it("includes spec generation guidance", () => {
-      expect(SUBTASK_PROMPT_V2).toContain("## [SPECS]");
-      expect(SUBTASK_PROMPT_V2).toContain("spec_quick_write");
-    });
-
     it("includes learning section", () => {
       expect(SUBTASK_PROMPT_V2).toContain("## [LEARNING]");
       expect(SUBTASK_PROMPT_V2).toContain("skills_create");
@@ -166,32 +157,6 @@ describe("Template Constants", () => {
     });
   });
 
-  describe("SPEC_GENERATION_PROMPT", () => {
-    it("includes decision table", () => {
-      expect(SPEC_GENERATION_PROMPT).toContain("When to Generate Specs");
-      expect(SPEC_GENERATION_PROMPT).toContain("complexity >= 4");
-      expect(SPEC_GENERATION_PROMPT).toContain("complexity == 3");
-      expect(SPEC_GENERATION_PROMPT).toContain("complexity <= 2");
-    });
-
-    it("includes auto-approve guidance", () => {
-      expect(SPEC_GENERATION_PROMPT).toContain("Auto-Approve?");
-      expect(SPEC_GENERATION_PROMPT).toContain("auto_approve: true");
-      expect(SPEC_GENERATION_PROMPT).toContain("auto_approve: false");
-    });
-
-    it("includes confidence scoring guide", () => {
-      expect(SPEC_GENERATION_PROMPT).toContain("Confidence Scoring");
-      expect(SPEC_GENERATION_PROMPT).toContain("0.85+");
-      expect(SPEC_GENERATION_PROMPT).toContain("0.7-0.84");
-    });
-
-    it("includes spec_quick_write examples", () => {
-      expect(SPEC_GENERATION_PROMPT).toContain("spec_quick_write");
-      expect(SPEC_GENERATION_PROMPT).toContain("capability:");
-      expect(SPEC_GENERATION_PROMPT).toContain("requirements:");
-    });
-  });
 });
 
 // ============================================================================
@@ -413,94 +378,6 @@ describe("formatEvaluationPrompt", () => {
   });
 });
 
-describe("formatSpecGenerationPrompt", () => {
-  it("returns base prompt when no params provided", () => {
-    const result = formatSpecGenerationPrompt();
-    expect(result).toBe(SPEC_GENERATION_PROMPT);
-  });
-
-  it("adds high complexity recommendation", () => {
-    const result = formatSpecGenerationPrompt({ task_complexity: 4 });
-
-    expect(result).toContain("Your Context");
-    expect(result).toContain("high complexity");
-    expect(result).toContain("human review");
-  });
-
-  it("adds medium complexity recommendation", () => {
-    const result = formatSpecGenerationPrompt({ task_complexity: 3 });
-
-    expect(result).toContain("medium complexity");
-    expect(result).toContain("auto-approve");
-  });
-
-  it("adds low complexity recommendation", () => {
-    const result = formatSpecGenerationPrompt({ task_complexity: 2 });
-
-    expect(result).toContain("low complexity");
-    expect(result).toContain("optional");
-  });
-
-  it("adds feature type recommendation", () => {
-    const result = formatSpecGenerationPrompt({ task_type: "feature" });
-
-    expect(result).toContain("Task type 'feature'");
-    expect(result).toContain("requires spec documentation");
-  });
-
-  it("adds epic type recommendation", () => {
-    const result = formatSpecGenerationPrompt({ task_type: "epic" });
-
-    expect(result).toContain("Task type 'epic'");
-    expect(result).toContain("requires spec documentation");
-  });
-
-  it("adds bug type recommendation", () => {
-    const result = formatSpecGenerationPrompt({ task_type: "bug" });
-
-    expect(result).toContain("Bug fixes");
-    expect(result).toContain("don't need specs");
-  });
-
-  it("adds open questions warning", () => {
-    const result = formatSpecGenerationPrompt({ has_open_questions: true });
-
-    expect(result).toContain("open questions");
-    expect(result).toContain("DO NOT auto-approve");
-  });
-
-  it("combines multiple recommendations", () => {
-    const result = formatSpecGenerationPrompt({
-      task_complexity: 4,
-      task_type: "feature",
-      has_open_questions: true,
-    });
-
-    expect(result).toContain("high complexity");
-    expect(result).toContain("Task type 'feature'");
-    expect(result).toContain("open questions");
-  });
-});
-
-describe("getSpecDecisionCriteria", () => {
-  it("returns condensed decision table", () => {
-    const result = getSpecDecisionCriteria();
-
-    expect(result).toContain("Spec Generation Decision Criteria");
-    expect(result).toContain(">= 4");
-    expect(result).toContain("3");
-    expect(result).toContain("<= 2");
-    expect(result).toContain("feature/epic");
-    expect(result).toContain("bug/chore");
-    expect(result).toContain("Open questions");
-  });
-
-  it("is shorter than full prompt", () => {
-    const criteria = getSpecDecisionCriteria();
-    expect(criteria.length).toBeLessThan(SPEC_GENERATION_PROMPT.length);
-  });
-});
-
 // ============================================================================
 // 3. Tool Tests
 // ============================================================================
@@ -626,145 +503,6 @@ describe("hive_evaluation_prompt tool", () => {
     expect(parsed.schema_hint.criteria.no_bugs).toBeDefined();
     expect(parsed.schema_hint.criteria.patterns).toBeDefined();
     expect(parsed.schema_hint.criteria.readable).toBeDefined();
-  });
-});
-
-describe("hive_spec_guidance tool", () => {
-  const mockCtx = {} as ToolContext;
-
-  it("returns decision for high complexity task", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_complexity: 4,
-        task_type: "feature",
-        has_open_questions: false,
-        include_full_guide: false,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.recommendation).toContain("High complexity");
-    expect(parsed.decision.should_generate_spec).toBe(true);
-    expect(parsed.decision.should_auto_approve).toBe(false);
-    expect(parsed.usage_example).toContain("spec_quick_write");
-  });
-
-  it("returns decision for medium complexity task", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_complexity: 3,
-        task_type: "feature",
-        has_open_questions: false,
-        include_full_guide: false,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.recommendation).toContain("Medium complexity");
-    expect(parsed.decision.should_generate_spec).toBe(true);
-    expect(parsed.decision.should_auto_approve).toBe(true);
-    expect(parsed.decision.confidence).toBe(0.85);
-  });
-
-  it("returns decision for low complexity task", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_complexity: 2,
-        task_type: "task",
-        include_full_guide: false,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.recommendation).toContain("Low complexity");
-    expect(parsed.decision.should_generate_spec).toBe(false);
-    expect(parsed.usage_example).toContain("No spec needed");
-  });
-
-  it("returns decision for bug type (always skip)", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_complexity: 4,
-        task_type: "bug",
-        include_full_guide: false,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.recommendation).toContain("bug");
-    expect(parsed.recommendation).toContain("skip");
-  });
-
-  it("returns decision for chore type (always skip)", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_type: "chore",
-        include_full_guide: false,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.recommendation).toContain("chore");
-    expect(parsed.recommendation).toContain("skip");
-  });
-
-  it("blocks auto-approve when has open questions", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_complexity: 3,
-        task_type: "feature",
-        has_open_questions: true,
-        include_full_guide: false,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.decision.should_auto_approve).toBe(false);
-    expect(parsed.decision.confidence).toBe(0.6);
-    expect(parsed.recommendation).toContain("questions");
-  });
-
-  it("includes condensed guidance by default", async () => {
-    const result = await hive_spec_guidance.execute(
-      { task_complexity: 3, include_full_guide: false },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.guidance).toContain("Spec Generation Decision Criteria");
-    expect(parsed.guidance.length).toBeLessThan(SPEC_GENERATION_PROMPT.length);
-  });
-
-  it("includes full guide when requested", async () => {
-    const result = await hive_spec_guidance.execute(
-      {
-        task_complexity: 3,
-        include_full_guide: true,
-      },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.guidance).toContain("How to Use spec_quick_write");
-    expect(parsed.guidance).toContain("Confidence Scoring");
-  });
-
-  it("uses default values when no params provided", async () => {
-    const result = await hive_spec_guidance.execute(
-      { include_full_guide: false },
-      mockCtx,
-    );
-
-    const parsed = JSON.parse(result);
-    expect(parsed.context.task_complexity).toBe(2);
-    expect(parsed.context.task_type).toBe("task");
-    expect(parsed.context.has_open_questions).toBe(false);
   });
 });
 

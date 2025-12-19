@@ -24,14 +24,16 @@ import { strategyTools } from "./hive-strategies";
 import { decomposeTools } from "./hive-decompose";
 import { promptTools } from "./hive-prompts";
 import { orchestrateTools } from "./hive-orchestrate";
+import { strikeTools } from "./hive-strikes";
 
 /**
  * Combined hive tools for plugin registration.
- * Includes all tools from strategy, decompose, prompt, and orchestrate modules.
+ * Includes all tools from strategy, decompose, prompt, orchestrate, and strikes modules.
  */
 export const hiveTools = {
   ...strategyTools,
   ...decomposeTools,
   ...promptTools,
   ...orchestrateTools,
+  ...strikeTools,
 };

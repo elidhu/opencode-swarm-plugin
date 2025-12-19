@@ -482,7 +482,7 @@ export const hive_delegate_planning = tool({
       .default(5)
       .describe("Maximum number of subtasks (default: 5)"),
     strategy: tool.schema
-      .enum(["auto", "file-based", "feature-based", "risk-based"])
+      .enum(["auto", "file-based", "feature-based", "risk-based", "research-based"])
       .optional()
       .default("auto")
       .describe("Decomposition strategy (default: auto-detect)"),
