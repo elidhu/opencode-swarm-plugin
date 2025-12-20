@@ -9,7 +9,7 @@
  *   hive sync     - Update config templates to latest versions
  *   hive config   - Show paths to config files
  *   hive inbox    - Human inbox for Swarm Mail messages
- *   hive spec     - Design specification management
+
  *   hive update   - Update to latest version
  *   hive version  - Show version info
  *   hive tool     - Execute a tool (for plugin wrapper)
@@ -18,7 +18,7 @@
  */
 
 import * as p from "@clack/prompts";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -106,9 +106,108 @@ async function version() {
   if (updateInfo) showUpdateNotification(updateInfo);
 }
 
+/**
+ * Detect if running from a local git repository (fork/development install)
+ * Returns the repo path if local, null if npm-installed
+ */
+function detectLocalInstall(): string | null {
+  try {
+    // __dirname is the bin/ directory, parent is the repo root
+    const repoRoot = join(__dirname, "..");
+    const gitDir = join(repoRoot, ".git");
+    if (existsSync(gitDir)) {
+      return repoRoot;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update a local fork installation via git pull + rebuild
+ */
+async function updateLocalFork(repoPath: string): Promise<boolean> {
+  const { execSync } = await import("child_process");
+  
+  try {
+    // Check for uncommitted changes
+    const status = execSync("git status --porcelain", { cwd: repoPath, encoding: "utf-8" });
+    if (status.trim()) {
+      p.log.warn("You have uncommitted changes. Stashing them...");
+      execSync("git stash", { cwd: repoPath, stdio: "inherit" });
+    }
+    
+    // Pull latest
+    p.log.step("Pulling latest changes...");
+    execSync("git pull --rebase", { cwd: repoPath, stdio: "inherit" });
+    
+    // Install dependencies
+    p.log.step("Installing dependencies...");
+    execSync("bun install", { cwd: repoPath, stdio: "inherit" });
+    
+    // Rebuild
+    p.log.step("Rebuilding...");
+    execSync("bun run build", { cwd: repoPath, stdio: "inherit" });
+    
+    // Pop stash if we stashed
+    if (status.trim()) {
+      p.log.step("Restoring stashed changes...");
+      execSync("git stash pop", { cwd: repoPath, stdio: "inherit" });
+    }
+    
+    return true;
+  } catch (error) {
+    p.log.error(`Update failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 async function update() {
   p.intro("hive update v" + VERSION);
 
+  // Check if this is a local fork install
+  const localRepoPath = detectLocalInstall();
+  
+  if (localRepoPath) {
+    p.log.info("Detected local fork installation at:");
+    console.log("  " + cyan(localRepoPath));
+    console.log();
+    
+    const confirmUpdate = await p.confirm({
+      message: "Update via git pull + rebuild?",
+      initialValue: true,
+    });
+
+    if (p.isCancel(confirmUpdate) || !confirmUpdate) {
+      p.outro("Update cancelled");
+      return;
+    }
+
+    const s = p.spinner();
+    s.start("Updating local fork...");
+    
+    const success = await updateLocalFork(localRepoPath);
+    
+    if (success) {
+      s.stop("Local fork updated successfully");
+      
+      // Re-read version after rebuild
+      const newPkg = JSON.parse(readFileSync(join(localRepoPath, "package.json"), "utf-8"));
+      p.log.success(`Now running v${newPkg.version}`);
+      p.outro("Update complete! Changes take effect immediately.");
+    } else {
+      s.stop("Update failed");
+      p.log.message("Try manually:");
+      console.log("  cd " + localRepoPath);
+      console.log("  git pull && bun install && bun run build");
+      p.outro("Update failed");
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Standard npm update flow
   const s = p.spinner();
   s.start("Checking for updates...");
 
@@ -173,8 +272,8 @@ ${cyan("Commands:")}
   hive config    Show paths to generated config files
   hive inbox     Human inbox for Swarm Mail messages
   hive metrics   Learning system health metrics
-  hive spec      Design specification management
-  hive update    Update to latest version
+
+  hive update    Update plugin (git pull for forks, npm for global)
   hive version   Show version and banner
   hive tool      Execute a tool (for plugin wrapper)
   hive help      Show this help
@@ -344,31 +443,7 @@ switch (command) {
     await metricsCommand(metricsArgs);
     break;
   }
-  case "spec": {
-    // Spec command - dynamically import to handle potential non-existence
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const specModule = await import("../src/cli/commands/spec.js") as any;
-      const specArgs = process.argv.slice(3);
-      if (typeof specModule.specCommand === "function") {
-        await specModule.specCommand(specArgs);
-      } else {
-        console.error("Spec command module found but specCommand not exported.");
-        console.log("Available spec tools: spec_write, spec_submit, spec_implement, spec_query");
-        console.log("Run: hive tool spec_query");
-        process.exit(1);
-      }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND") {
-        console.error("Spec command not yet implemented. Use spec_* tools directly.");
-        console.log("Available spec tools: spec_write, spec_submit, spec_implement, spec_query");
-        console.log("Run: hive tool spec_query");
-        process.exit(1);
-      }
-      throw e;
-    }
-    break;
-  }
+
   case "update":
     await update();
     break;
