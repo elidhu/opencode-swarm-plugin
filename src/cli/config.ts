@@ -136,7 +136,8 @@ export function readConfigWithFallback(configType: ConfigType): string | null {
 
 /**
  * Extract config version from file content
- * Looks for: # hive-config-version: X.Y.Z
+ * Looks for: # hive-config-version: X.Y.Z (markdown)
+ *        or: // hive-config-version: X.Y.Z (TypeScript)
  * Returns null if no version found
  */
 export function getConfigVersion(filepath: string): string | null {
@@ -145,6 +146,7 @@ export function getConfigVersion(filepath: string): string | null {
   }
   
   const content = readFileSync(filepath, "utf-8");
-  const match = content.match(/# hive-config-version: ([\d.]+)/);
+  // Match both # (markdown) and // (TypeScript) comment styles
+  const match = content.match(/(?:#|\/\/) hive-config-version: ([\d.]+)/);
   return match ? match[1] : null;
 }

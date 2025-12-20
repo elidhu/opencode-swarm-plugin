@@ -186,17 +186,23 @@ hivemail_send(
  * Generate the plugin wrapper TypeScript template
  * Tries to read from examples/plugin-wrapper-template.ts
  * Falls back to minimal wrapper if file not found
+ * 
+ * Prepends version header as a comment for TypeScript files
  */
 export function getPluginWrapper(): string {
   const templatePath = join(__dirname, "..", "..", "examples", "plugin-wrapper-template.ts");
+  // For TypeScript files, use // comment style for version header
+  const tsVersionHeader = `// hive-config-version: ${CONFIG_VERSION}`;
   
   try {
-    return readFileSync(templatePath, "utf-8");
+    const template = readFileSync(templatePath, "utf-8");
+    return `${tsVersionHeader}\n${template}`;
   } catch {
     console.warn(
       `[hive] Could not read plugin template from ${templatePath}, using minimal wrapper`
     );
-    return `// Minimal fallback - install opencode-hive-plugin globally for full functionality
+    return `${tsVersionHeader}
+// Minimal fallback - install opencode-hive-plugin globally for full functionality
 import { HivePlugin } from "opencode-hive-plugin"
 export default HivePlugin
 `;
